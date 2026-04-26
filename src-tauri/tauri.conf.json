@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "GBA orca",
+  "productName": "GBA Orca",
   "version": "0.1.1",
   "identifier": "gba-orca",
   "build": {
