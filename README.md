@@ -29,7 +29,6 @@ GBA Orca finds the GBA windows automatically, captures each one with FFmpeg, and
 
 The app rescans every 3 seconds, so closing or restarting Dolphin mid-session is fine — the list updates on its own.
 
-**Known issue:** the first time a phone opens the URL, the page may look stuck. Just click the GBA window on the PC and move the mouse over it once. After that it works normally. 
 
 ## Build from source
 
