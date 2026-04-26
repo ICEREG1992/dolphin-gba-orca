@@ -259,7 +259,7 @@ async fn start_stream(
             "-f", "gdigrab",
             "-framerate", "30",
             "-i", &title_arg,
-            "-vf", "mpdecimate",
+            "-vf", "mpdecimate=max=30",
             "-fps_mode", "vfr",
             "-c:v", "mjpeg",
             "-q:v", "5",
