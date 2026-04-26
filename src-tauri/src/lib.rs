@@ -110,6 +110,7 @@ struct StreamSession {
     child: CommandChild,
     sender: broadcast::Sender<Bytes>,
     ingest_task: tauri::async_runtime::JoinHandle<()>,
+    keepalive_task: tauri::async_runtime::JoinHandle<()>,
 }
 
 #[derive(Clone, Default)]
@@ -180,20 +181,12 @@ async fn start_stream(
 
     // Se la finestra è minimizzata, ripristinala senza rubare il focus
     // e mandala in fondo allo z-order così non copre il gioco principale.
-    unsafe {
-        let win = HWND(hwnd as *mut _);
-        if IsIconic(win).as_bool() {
-            let _ = ShowWindow(win, SW_SHOWNOACTIVATE);
-            let _ = SetWindowPos(
-                win,
-                HWND_BOTTOM,
-                0, 0, 0, 0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-            );
-            // Piccola pausa per dare tempo a Windows di ridisegnare la finestra
-            // prima che gdigrab provi a leggerla
-            tokio::time::sleep(Duration::from_millis(150)).await;
-        }
+    let was_initially_minimized = unsafe {
+        IsIconic(HWND(hwnd as *mut _)).as_bool()
+    };
+    if was_initially_minimized {
+        restore_window_silent(hwnd);
+        tokio::time::sleep(Duration::from_millis(150)).await;
     }
 
     let ingest_port = ingest_port_for_slot(slot);
@@ -208,6 +201,28 @@ async fn start_stream(
         ingest_loop(slot, listener, sender_for_ingest).await;
     });
 
+// Keepalive: se l'utente o il sistema riminimizzano la finestra
+    // mentre lo stream è attivo, la rimettiamo come la vogliamo noi.
+    // Attivo solo se l'utente l'aveva avviata da minimizzata.
+    let hwnd_for_keepalive = hwnd;
+    let slot_for_keepalive = slot;
+    let keepalive_task = tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let mut interval = tokio::time::interval(Duration::from_millis(500));
+        loop {
+            interval.tick().await;
+            if was_initially_minimized {
+                let is_min = unsafe {
+                    IsIconic(HWND(hwnd_for_keepalive as *mut _)).as_bool()
+                };
+                if is_min {
+                    eprintln!("[keepalive slot {}] finestra riminimizzata, ripristino", slot_for_keepalive);
+                    restore_window_silent(hwnd_for_keepalive);
+                }
+            }
+        }
+    });
+
     let title_arg = format!("title={}", window_title);
     let output_url = format!("tcp://127.0.0.1:{}", ingest_port);
 
@@ -215,6 +230,7 @@ async fn start_stream(
         Ok(s) => s,
         Err(e) => {
             ingest_task.abort();
+            keepalive_task.abort();
             return Err(format!("ffmpeg sidecar non trovato: {}", e));
         }
     };
@@ -238,12 +254,13 @@ async fn start_stream(
         ]);
 
     let (mut rx, child) = match command.spawn() {
-            Ok(v) => v,
-            Err(e) => {
-                ingest_task.abort();
-                return Err(format!("spawn fallito: {}", e));
-            }
-        };
+        Ok(v) => v,
+        Err(e) => {
+            ingest_task.abort();
+            keepalive_task.abort();
+            return Err(format!("spawn fallito: {}", e));
+        }
+    };
 
         let slot_log = slot;
         let sessions_for_cleanup = state.sessions.clone();
@@ -254,14 +271,14 @@ async fn start_stream(
                         eprintln!("[ffmpeg slot {}] {}", slot_log, String::from_utf8_lossy(&line));
                     }
                     CommandEvent::Terminated(payload) => {
-                        eprintln!("[ffmpeg slot {}] terminato: code={:?}", slot_log, payload.code);
-                        // Rimuovi la sessione morta dallo state
-                        if let Ok(mut sessions) = sessions_for_cleanup.lock() {
-                            if let Some(session) = sessions.remove(&slot_log) {
-                                session.ingest_task.abort();
-                            }
+                    eprintln!("[ffmpeg slot {}] terminato: code={:?}", slot_log, payload.code);
+                    if let Ok(mut sessions) = sessions_for_cleanup.lock() {
+                        if let Some(session) = sessions.remove(&slot_log) {
+                            session.ingest_task.abort();
+                            session.keepalive_task.abort();
                         }
                     }
+                }
                     _ => {}
                 }
             }
@@ -279,6 +296,7 @@ async fn start_stream(
         child,
         sender,
         ingest_task,
+        keepalive_task,
     });
 
     Ok(info)
@@ -293,6 +311,7 @@ fn stop_stream(state: State<'_, SharedState>, slot: u8) -> Result<(), String> {
     };
     let _ = session.child.kill();
     session.ingest_task.abort();
+    session.keepalive_task.abort();
     Ok(())
 }
 
@@ -377,6 +396,22 @@ fn get_server_info() -> Result<ServerInfo, String> {
     Ok(ServerInfo { interfaces, port: HTTP_PORT })
 }
 
+/// Ripristina una finestra minimizzata senza rubare il focus
+/// e la manda in fondo allo z-order. Operazione idempotente.
+fn restore_window_silent(hwnd_val: isize) {
+    unsafe {
+        let win = HWND(hwnd_val as *mut _);
+        if IsIconic(win).as_bool() {
+            let _ = ShowWindow(win, SW_SHOWNOACTIVATE);
+            let _ = SetWindowPos(
+                win,
+                HWND_BOTTOM,
+                0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
+        }
+    }
+}
 
 // ============= AXUM HTTP SERVER =============
 
@@ -476,6 +511,8 @@ async fn run_http_server(state: SharedState) {
         Err(e) => eprintln!("[http] bind failed on {}: {}", bind, e),
     }
 }
+
+
 
 // ============= ENTRY POINT =============
 
