@@ -65,8 +65,8 @@ The axum server proxies each FFmpeg process so multiple viewers can watch the sa
 
 ## Roadmap
 
-- PIN-based routing (4-digit code instead of full URL)
-- WebRTC via MediaMTX for sub-100ms latency
+- Custom APP for Android and Windows with PIN-based routing (4-digit code instead of full URL)
+- WebRTC via MediaMTX
 - Backend refactor into separate modules
 - Linux build (X11 and Wayland)
 
