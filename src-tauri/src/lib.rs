@@ -23,7 +23,7 @@ use tokio_stream::wrappers::BroadcastStream;
 use windows::Win32::Foundation::{BOOL, HWND, LPARAM, RECT, TRUE};
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
-    GetWindowThreadProcessId, IsWindowVisible, IsIconic, ShowWindow, SetWindowPos,
+    GetWindowThreadProcessId, IsWindow, IsWindowVisible, IsIconic, ShowWindow, SetWindowPos,
     SW_SHOWNOACTIVATE, HWND_BOTTOM, SWP_NOMOVE, SWP_NOSIZE, SWP_NOACTIVATE,
 };
 
@@ -181,10 +181,10 @@ async fn start_stream(
 
     // Se la finestra è minimizzata, ripristinala senza rubare il focus
     // e mandala in fondo allo z-order così non copre il gioco principale.
-    let was_initially_minimized = unsafe {
+    let initially_minimized = unsafe {
         IsIconic(HWND(hwnd as *mut _)).as_bool()
     };
-    if was_initially_minimized {
+    if initially_minimized {
         restore_window_silent(hwnd);
         tokio::time::sleep(Duration::from_millis(150)).await;
     }
@@ -206,19 +206,34 @@ async fn start_stream(
     // Attivo solo se l'utente l'aveva avviata da minimizzata.
     let hwnd_for_keepalive = hwnd;
     let slot_for_keepalive = slot;
+    let sessions_for_keepalive = state.sessions.clone();
     let keepalive_task = tauri::async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_millis(500)).await;
         let mut interval = tokio::time::interval(Duration::from_millis(500));
         loop {
             interval.tick().await;
-            if was_initially_minimized {
-                let is_min = unsafe {
-                    IsIconic(HWND(hwnd_for_keepalive as *mut _)).as_bool()
-                };
-                if is_min {
-                    eprintln!("[keepalive slot {}] finestra riminimizzata, ripristino", slot_for_keepalive);
-                    restore_window_silent(hwnd_for_keepalive);
+            let win = unsafe { HWND(hwnd_for_keepalive as *mut _) };
+
+            // 1) La finestra esiste ancora?
+            let alive = unsafe { IsWindow(win).as_bool() };
+            if !alive {
+                eprintln!("[keepalive slot {}] finestra chiusa dall'utente, fermo stream", slot_for_keepalive);
+                // Killiamo FFmpeg e rimuoviamo la sessione. Il task logger
+                // rileverà comunque la terminazione ma intanto puliamo.
+                if let Ok(mut sessions) = sessions_for_keepalive.lock() {
+                    if let Some(session) = sessions.remove(&slot_for_keepalive) {
+                        let _ = session.child.kill();
+                        session.ingest_task.abort();
+                    }
                 }
+                break; // esce dal loop, il task finisce
+            }
+
+            // 2) È stata minimizzata? Ripristina.
+            let is_min = unsafe { IsIconic(win).as_bool() };
+            if is_min {
+                eprintln!("[keepalive slot {}] finestra minimizzata, ripristino", slot_for_keepalive);
+                restore_window_silent(hwnd_for_keepalive);
             }
         }
     });
