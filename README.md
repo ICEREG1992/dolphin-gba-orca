@@ -2,7 +2,7 @@
 
 Stream Dolphin's GBA windows to phones and tablets on your local network.
 
-When you play GameCube games that use GBA-link features, Dolphin opens separate GBA windows on your PC. GBA Orca picks up those windows and streams each one to a browser on any device connected to the same Wi-Fi — no app to install on the phone.
+When you play GameCube games that use GBA-link features, Dolphin opens separate GBA windows on your PC. GBA Orca picks up those windows and streams each one to a browser on any device connected to the same Wi-Fi or LAN
 
 ## How it works
 
