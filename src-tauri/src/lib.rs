@@ -42,12 +42,12 @@ pub struct WindowInfo {
 }
 
 fn detect_gba_slot(title: &str) -> Option<u8> {
-    for slot in 1u8..=4 {
-        if title.contains(&format!("GBA{}", slot)) {
-            return Some(slot);
-        }
-    }
-    None
+    const SLOTS: [(&str, u8); 4] = [("GBA1", 1), ("GBA2", 2), ("GBA3", 3), ("GBA4", 4)];
+    SLOTS.iter().find(|(s, _)| title.contains(s)).map(|(_, n)| *n)
+}
+
+fn to_hwnd(v: isize) -> HWND {
+    HWND(v as *mut _)
 }
 
 unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
@@ -65,8 +65,6 @@ unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
     let _ = GetWindowRect(hwnd, &mut rect);
     let width = rect.right - rect.left;
     let height = rect.bottom - rect.top;
-
-    // Salta finestre minimizzate (dimensione 0x0)
 
     out.push(WindowInfo {
         hwnd: hwnd.0 as isize,
@@ -105,12 +103,17 @@ fn ingest_port_for_slot(slot: u8) -> u16 {
 }
 
 struct StreamSession {
-    slot: u8,
     title: String,
     child: CommandChild,
     sender: broadcast::Sender<Bytes>,
     ingest_task: tauri::async_runtime::JoinHandle<()>,
     keepalive_task: tauri::async_runtime::JoinHandle<()>,
+}
+
+fn shutdown_session(session: StreamSession) {
+    let _ = session.child.kill();
+    session.ingest_task.abort();
+    session.keepalive_task.abort();
 }
 
 #[derive(Clone, Default)]
@@ -181,9 +184,7 @@ async fn start_stream(
 
     // Se la finestra è minimizzata, ripristinala senza rubare il focus
     // e mandala in fondo allo z-order così non copre il gioco principale.
-    let initially_minimized = unsafe {
-        IsIconic(HWND(hwnd as *mut _)).as_bool()
-    };
+    let initially_minimized = unsafe { IsIconic(to_hwnd(hwnd)).as_bool() };
     if initially_minimized {
         restore_window_silent(hwnd);
         tokio::time::sleep(Duration::from_millis(150)).await;
@@ -201,39 +202,34 @@ async fn start_stream(
         ingest_loop(slot, listener, sender_for_ingest).await;
     });
 
-// Keepalive: se l'utente o il sistema riminimizzano la finestra
+    // Keepalive: se l'utente o il sistema riminimizzano la finestra
     // mentre lo stream è attivo, la rimettiamo come la vogliamo noi.
     // Attivo solo se l'utente l'aveva avviata da minimizzata.
-    let hwnd_for_keepalive = hwnd;
-    let slot_for_keepalive = slot;
-    let sessions_for_keepalive = state.sessions.clone();
+    let sessions = state.sessions.clone();
     let keepalive_task = tauri::async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_millis(500)).await;
         let mut interval = tokio::time::interval(Duration::from_millis(500));
         loop {
             interval.tick().await;
-            let win = unsafe { HWND(hwnd_for_keepalive as *mut _) };
+            let win = to_hwnd(hwnd);
 
             // 1) La finestra esiste ancora?
             let alive = unsafe { IsWindow(win).as_bool() };
             if !alive {
-                eprintln!("[keepalive slot {}] finestra chiusa dall'utente, fermo stream", slot_for_keepalive);
-                // Killiamo FFmpeg e rimuoviamo la sessione. Il task logger
-                // rileverà comunque la terminazione ma intanto puliamo.
-                if let Ok(mut sessions) = sessions_for_keepalive.lock() {
-                    if let Some(session) = sessions.remove(&slot_for_keepalive) {
-                        let _ = session.child.kill();
-                        session.ingest_task.abort();
+                eprintln!("[keepalive slot {}] finestra chiusa dall'utente, fermo stream", slot);
+                if let Ok(mut sessions) = sessions.lock() {
+                    if let Some(session) = sessions.remove(&slot) {
+                        shutdown_session(session);
                     }
                 }
-                break; // esce dal loop, il task finisce
+                break;
             }
 
             // 2) È stata minimizzata? Ripristina.
             let is_min = unsafe { IsIconic(win).as_bool() };
             if is_min {
-                eprintln!("[keepalive slot {}] finestra minimizzata, ripristino", slot_for_keepalive);
-                restore_window_silent(hwnd_for_keepalive);
+                eprintln!("[keepalive slot {}] finestra minimizzata, ripristino", slot);
+                restore_window_silent(hwnd);
             }
         }
     });
@@ -277,27 +273,25 @@ async fn start_stream(
         }
     };
 
-        let slot_log = slot;
-        let sessions_for_cleanup = state.sessions.clone();
-        tauri::async_runtime::spawn(async move {
-            while let Some(event) = rx.recv().await {
-                match event {
-                    CommandEvent::Stderr(line) => {
-                        eprintln!("[ffmpeg slot {}] {}", slot_log, String::from_utf8_lossy(&line));
-                    }
-                    CommandEvent::Terminated(payload) => {
-                    eprintln!("[ffmpeg slot {}] terminato: code={:?}", slot_log, payload.code);
-                    if let Ok(mut sessions) = sessions_for_cleanup.lock() {
-                        if let Some(session) = sessions.remove(&slot_log) {
-                            session.ingest_task.abort();
-                            session.keepalive_task.abort();
+    let sessions = state.sessions.clone();
+    tauri::async_runtime::spawn(async move {
+        while let Some(event) = rx.recv().await {
+            match event {
+                CommandEvent::Stderr(line) => {
+                    eprintln!("[ffmpeg slot {}] {}", slot, String::from_utf8_lossy(&line));
+                }
+                CommandEvent::Terminated(payload) => {
+                    eprintln!("[ffmpeg slot {}] terminato: code={:?}", slot, payload.code);
+                    if let Ok(mut sessions) = sessions.lock() {
+                        if let Some(session) = sessions.remove(&slot) {
+                            shutdown_session(session);
                         }
                     }
                 }
-                    _ => {}
-                }
+                _ => {}
             }
-        });
+        }
+    });
 
     let info = StreamInfo {
         slot,
@@ -306,7 +300,6 @@ async fn start_stream(
     };
 
     state.sessions.lock().unwrap().insert(slot, StreamSession {
-        slot,
         title: window_title,
         child,
         sender,
@@ -319,24 +312,19 @@ async fn start_stream(
 
 #[tauri::command]
 fn stop_stream(state: State<'_, SharedState>, slot: u8) -> Result<(), String> {
-    let session = {
-        let mut sessions = state.sessions.lock().unwrap();
-        sessions.remove(&slot)
-            .ok_or_else(|| format!("Nessuno stream attivo per slot {}", slot))?
-    };
-    let _ = session.child.kill();
-    session.ingest_task.abort();
-    session.keepalive_task.abort();
+    let session = state.sessions.lock().unwrap().remove(&slot)
+        .ok_or_else(|| format!("Nessuno stream attivo per slot {}", slot))?;
+    shutdown_session(session);
     Ok(())
 }
 
 #[tauri::command]
 fn list_streams(state: State<'_, SharedState>) -> Vec<StreamInfo> {
     let sessions = state.sessions.lock().unwrap();
-    sessions.values().map(|s| StreamInfo {
-        slot: s.slot,
+    sessions.iter().map(|(&slot, s)| StreamInfo {
+        slot,
         title: s.title.clone(),
-        url: stream_url(s.slot),
+        url: stream_url(slot),
     }).collect()
 }
 
@@ -414,8 +402,8 @@ fn get_server_info() -> Result<ServerInfo, String> {
 /// Ripristina una finestra minimizzata senza rubare il focus
 /// e la manda in fondo allo z-order. Operazione idempotente.
 fn restore_window_silent(hwnd_val: isize) {
+    let win = to_hwnd(hwnd_val);
     unsafe {
-        let win = HWND(hwnd_val as *mut _);
         if IsIconic(win).as_bool() {
             let _ = ShowWindow(win, SW_SHOWNOACTIVATE);
             let _ = SetWindowPos(
