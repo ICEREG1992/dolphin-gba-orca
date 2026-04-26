@@ -2,6 +2,62 @@
   import { invoke } from "@tauri-apps/api/core";
   import { onMount, onDestroy } from "svelte";
 
+  // ---- i18n ----
+  const translations = {
+    it: {
+      refresh: "Aggiorna",
+      scanning: "Scansione...",
+      gbaOnly: "Solo finestre GBA",
+      autoScan: "Auto-scan: 3s",
+      server: "Server:",
+      clickToCopy: "Click per copiare",
+      slot: "Slot",
+      windowTitle: "Titolo finestra",
+      size: "Dim.",
+      status: "Stato",
+      startStream: "Avvia stream",
+      stop: "Stop",
+      noWindows: "Nessuna finestra trovata",
+      windowsLabel: "finestre",
+      activeStreams: "stream attivi",
+      interfaces: "interfacce di rete",
+      language: "Lingua",
+    },
+    en: {
+      refresh: "Refresh",
+      scanning: "Scanning...",
+      gbaOnly: "GBA windows only",
+      autoScan: "Auto-scan: 3s",
+      server: "Server:",
+      clickToCopy: "Click to copy",
+      slot: "Slot",
+      windowTitle: "Window title",
+      size: "Size",
+      status: "Status",
+      startStream: "Start stream",
+      stop: "Stop",
+      noWindows: "No windows found",
+      windowsLabel: "windows",
+      activeStreams: "active streams",
+      interfaces: "network interfaces",
+      language: "Language",
+    },
+  };
+
+  function detectLang() {
+    // Prima controlla se l'utente ha già scelto una lingua
+    const saved = localStorage.getItem("gba-orca-lang");
+    if (saved && translations[saved]) return saved;
+    // Altrimenti usa la lingua del sistema operativo
+    const sys = (navigator.language || navigator.userLanguage || "en").toLowerCase();
+    return sys.startsWith("it") ? "it" : "en";
+  }
+
+  let lang = detectLang();
+  $: t = translations[lang];
+  $: localStorage.setItem("gba-orca-lang", lang);
+
+  // ---- stato applicazione ----
   let windows = [];
   let streams = {};
   let server = { interfaces: [], port: 8080 };
@@ -94,18 +150,26 @@
 
   <div class="toolbar">
     <button on:click={() => doScan(false)} disabled={loading}>
-      {loading ? "Scansione..." : "Aggiorna"}
+      {loading ? t.scanning : t.refresh}
     </button>
     <label class="chk">
       <input type="checkbox" bind:checked={gbaOnly} />
-      Solo finestre GBA
+      {t.gbaOnly}
     </label>
     <span class="sep"></span>
-    <span class="info">Auto-scan: 3s</span>
+    <span class="info">{t.autoScan}</span>
+    <span class="grow"></span>
+    <label class="chk">
+      {t.language}:
+      <select bind:value={lang}>
+        <option value="it">Italiano</option>
+        <option value="en">English</option>
+      </select>
+    </label>
   </div>
 
   <div class="server-row">
-    <label>Server:</label>
+    <label>{t.server}</label>
     {#if server.interfaces.length > 1}
       <select bind:value={selectedIp}>
         {#each server.interfaces as iface}
@@ -113,7 +177,7 @@
         {/each}
       </select>
     {/if}
-    <code on:click={() => copyToClipboard(serverUrl)} title="Click per copiare">
+    <code on:click={() => copyToClipboard(serverUrl)} title={t.clickToCopy}>
       {serverUrl}
     </code>
   </div>
@@ -126,11 +190,11 @@
     <table>
       <thead>
         <tr>
-          <th style="width:50px">Slot</th>
-          <th>Titolo finestra</th>
+          <th style="width:50px">{t.slot}</th>
+          <th>{t.windowTitle}</th>
           <th style="width:80px">PID</th>
-          <th style="width:90px">Dim.</th>
-          <th style="width:280px">Stato</th>
+          <th style="width:90px">{t.size}</th>
+          <th style="width:280px">{t.status}</th>
         </tr>
       </thead>
       <tbody>
@@ -146,30 +210,30 @@
               {#if w.gba_slot}
                 {#if streams[w.gba_slot]}
                   {@const url = `${serverUrl}/v/${w.gba_slot}`}
-                  <code class="url" on:click={() => copyToClipboard(url)} title="Click per copiare">
+                  <code class="url" on:click={() => copyToClipboard(url)} title={t.clickToCopy}>
                     {url}
                   </code>
-                  <button on:click={() => stopStream(w.gba_slot)}>Stop</button>
+                  <button on:click={() => stopStream(w.gba_slot)}>{t.stop}</button>
                 {:else}
-                  <button on:click={() => startStream(w)}>Avvia stream</button>
+                  <button on:click={() => startStream(w)}>{t.startStream}</button>
                 {/if}
               {/if}
             </td>
           </tr>
         {/each}
         {#if windows.length === 0}
-          <tr><td colspan="5" class="empty">Nessuna finestra trovata</td></tr>
+          <tr><td colspan="5" class="empty">{t.noWindows}</td></tr>
         {/if}
       </tbody>
     </table>
   </div>
 
   <div class="statusbar">
-    <span>{windows.length} finestre</span>
+    <span>{windows.length} {t.windowsLabel}</span>
     <span class="sep-v"></span>
-    <span>{Object.keys(streams).length} stream attivi</span>
+    <span>{Object.keys(streams).length} {t.activeStreams}</span>
     <span class="grow"></span>
-    <span>{server.interfaces.length} interfacce di rete</span>
+    <span>{server.interfaces.length} {t.interfaces}</span>
   </div>
 </div>
 
@@ -177,7 +241,7 @@
   :global(html), :global(body) {
     margin: 0;
     padding: 0;
-    background: #f3f3f3; /* Classico sfondo grigio chiaro Win10 */
+    background: #f3f3f3;
     font-family: "Segoe UI", sans-serif;
     font-size: 12px;
     color: #000;
@@ -190,7 +254,6 @@
     height: 100vh;
   }
 
-  /* Layout Superiore */
   .titlebar {
     background: #fff;
     border-bottom: 1px solid #e0e0e0;
@@ -214,6 +277,10 @@
     background: #e0e0e0;
   }
 
+  .grow {
+    flex: 1;
+  }
+
   .info {
     color: #666;
     font-style: italic;
@@ -226,7 +293,13 @@
     cursor: pointer;
   }
 
-  /* Riga Server */
+  .toolbar select {
+    font-family: "Segoe UI", sans-serif;
+    background: #fff;
+    border: 1px solid #ccc;
+    padding: 2px 4px;
+  }
+
   .server-row {
     background: #fff;
     border-bottom: 1px solid #e0e0e0;
@@ -240,7 +313,6 @@
     font-weight: 600;
   }
 
-  /* Campi codice/URL unificati e piatti */
   .server-row select,
   .server-row code,
   .url {
@@ -253,11 +325,10 @@
 
   .server-row code:hover,
   .url:hover {
-    border-color: #0078d7; /* Azzurro Win10 */
+    border-color: #0078d7;
     background: #e5f1fb;
   }
 
-  /* Barra Errore */
   .error-bar {
     background: #fde7e9;
     border-bottom: 1px solid #c42b1c;
@@ -266,7 +337,6 @@
     font-family: "Consolas", monospace;
   }
 
-  /* Tabella */
   .table-wrap {
     flex: 1;
     overflow: auto;
@@ -292,15 +362,14 @@
   }
 
   tbody tr:hover {
-    background: #e5f1fb; /* Selezione azzurra Win10 */
+    background: #e5f1fb;
   }
 
-  /* GBA ORCA - Più grande e in evidenza */
   tr.gba {
     background: #fff8e1;
-    font-size: 15px;      /* Font più grande */
-    font-weight: 600;     /* Grassetto */
-    padding: 10px;        /* Più spazio interno */
+    font-size: 15px;
+    font-weight: 600;
+    padding: 10px;
   }
 
   tr.gba:hover {
@@ -329,7 +398,6 @@
     font-style: italic;
   }
 
-  /* Bottoni Stile Win10 */
   button {
     background: #fff;
     border: 1px solid #999;
@@ -354,7 +422,6 @@
     background: #f5f5f5;
   }
 
-  /* StatusBar */
   .statusbar {
     background: #f3f3f3;
     border-top: 1px solid #e0e0e0;
@@ -370,9 +437,5 @@
     width: 1px;
     height: 12px;
     background: #d0d0d0;
-  }
-
-  .grow {
-    flex: 1;
   }
 </style>
