@@ -396,13 +396,48 @@ async fn viewer_handler(Path(slot): Path<u8>) -> Html<String> {
         r#"<!DOCTYPE html>
 <html><head>
 <title>GBA{slot}</title>
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
 <style>
-body{{margin:0;background:#000;display:flex;align-items:center;justify-content:center;min-height:100vh}}
-img{{max-width:100%;max-height:100vh;image-rendering:pixelated}}
+*{{margin:0;padding:0;box-sizing:border-box}}
+html,body{{width:100%;height:100%;background:#000;overflow:hidden}}
+.wrap{{position:fixed;inset:0;display:flex;align-items:center;justify-content:center}}
+img{{
+  width:100%;
+  height:100%;
+  object-fit:contain;
+  image-rendering:pixelated;
+  transition:transform .15s ease;
+}}
+body.rot img{{
+  width:100vh;
+  height:100vw;
+  transform:rotate(90deg);
+}}
+.rot-btn{{
+  position:fixed;
+  bottom:14px;
+  right:14px;
+  width:44px;
+  height:44px;
+  border:none;
+  border-radius:50%;
+  background:rgba(255,255,255,.18);
+  color:#fff;
+  font-size:22px;
+  cursor:pointer;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  -webkit-tap-highlight-color:transparent;
+  z-index:10;
+  backdrop-filter:blur(4px);
+}}
+.rot-btn:active{{background:rgba(255,255,255,.35)}}
 </style>
 </head><body>
-<img src="/stream/{slot}" alt="GBA{slot}">
+<div class="wrap"><img src="/stream/{slot}" alt="GBA{slot}"></div>
+<button class="rot-btn" onclick="document.body.classList.toggle('rot')" title="Ruota">⟳</button>
 </body></html>"#
     ))
 }

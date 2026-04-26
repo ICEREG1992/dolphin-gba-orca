@@ -11,9 +11,9 @@
   let error = "";
   let autoScanInterval = null;
 
-$: serverUrl = `http://${selectedIp || "..."}:${server.port}`;
+  $: serverUrl = `http://${selectedIp || "..."}:${server.port}`;
 
-async function loadServerInfo() {
+  async function loadServerInfo() {
     try {
       server = await invoke("get_server_info");
       if (server.interfaces.length > 0 && !selectedIp) {
@@ -87,94 +87,311 @@ async function loadServerInfo() {
   });
 </script>
 
-<main>
-  <header>
-    <h1>GBA Orca</h1>
-    <div class="server-banner">
-  <span class="label">Server LAN:</span>
-  {#if server.interfaces.length > 1}
-    <select bind:value={selectedIp} class="iface-select">
-      {#each server.interfaces as iface}
-        <option value={iface.ip}>
-          {iface.ip} — {iface.name}
-        </option>
-      {/each}
-    </select>
-  {/if}
-  <code on:click={() => copyToClipboard(serverUrl)} title="Click per copiare">
-    {serverUrl}
-  </code>
-</div>
-  </header>
+<div class="app">
+  <div class="titlebar">
+    GBA Orca
+  </div>
 
-  <div class="controls">
+  <div class="toolbar">
     <button on:click={() => doScan(false)} disabled={loading}>
-      {loading ? "Scansione..." : "Scansiona ora"}
+      {loading ? "Scansione..." : "Aggiorna"}
     </button>
-    <label>
+    <label class="chk">
       <input type="checkbox" bind:checked={gbaOnly} />
       Solo finestre GBA
     </label>
-    <span class="auto-tag">auto-scan ogni 3s</span>
+    <span class="sep"></span>
+    <span class="info">Auto-scan: 3s</span>
+  </div>
+
+  <div class="server-row">
+    <label>Server:</label>
+    {#if server.interfaces.length > 1}
+      <select bind:value={selectedIp}>
+        {#each server.interfaces as iface}
+          <option value={iface.ip}>{iface.ip} — {iface.name}</option>
+        {/each}
+      </select>
+    {/if}
+    <code on:click={() => copyToClipboard(serverUrl)} title="Click per copiare">
+      {serverUrl}
+    </code>
   </div>
 
   {#if error}
-    <div class="error">{error}</div>
+    <div class="error-bar">{error}</div>
   {/if}
 
-  <p class="count">{windows.length} finestre {gbaOnly ? "GBA" : "totali"}</p>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th style="width:50px">Slot</th>
+          <th>Titolo finestra</th>
+          <th style="width:80px">PID</th>
+          <th style="width:90px">Dim.</th>
+          <th style="width:280px">Stato</th>
+        </tr>
+      </thead>
+      <tbody>
+        {#each windows as w (w.hwnd)}
+          <tr class:gba={w.gba_slot}>
+            <td class="slot-cell">
+              {#if w.gba_slot}<b>GBA{w.gba_slot}</b>{/if}
+            </td>
+            <td class="title-cell" title={w.title}>{w.title}</td>
+            <td class="mono">{w.pid}</td>
+            <td class="mono">{w.width}×{w.height}</td>
+            <td>
+              {#if w.gba_slot}
+                {#if streams[w.gba_slot]}
+                  {@const url = `${serverUrl}/v/${w.gba_slot}`}
+                  <code class="url" on:click={() => copyToClipboard(url)} title="Click per copiare">
+                    {url}
+                  </code>
+                  <button on:click={() => stopStream(w.gba_slot)}>Stop</button>
+                {:else}
+                  <button on:click={() => startStream(w)}>Avvia stream</button>
+                {/if}
+              {/if}
+            </td>
+          </tr>
+        {/each}
+        {#if windows.length === 0}
+          <tr><td colspan="5" class="empty">Nessuna finestra trovata</td></tr>
+        {/if}
+      </tbody>
+    </table>
+  </div>
 
-  <ul class="window-list">
-    {#each windows as w (w.hwnd)}
-      <li class:gba={w.gba_slot}>
-        {#if w.gba_slot}
-          <span class="badge">GBA{w.gba_slot}</span>
-        {/if}
-        <span class="title">{w.title}</span>
-        <span class="meta">PID {w.pid} · {w.width}×{w.height}</span>
-        {#if w.gba_slot}
-          {#if streams[w.gba_slot]}
-            {@const url = `${serverUrl}/v/${w.gba_slot}`}
-            <div class="stream-live">
-              <code on:click={() => copyToClipboard(url)} title="Click per copiare">
-                {url}
-              </code>
-              <button on:click={() => stopStream(w.gba_slot)}>Stop</button>
-            </div>
-          {:else}
-            <button on:click={() => startStream(w)}>Start stream</button>
-          {/if}
-        {/if}
-      </li>
-    {/each}
-  </ul>
-</main>
+  <div class="statusbar">
+    <span>{windows.length} finestre</span>
+    <span class="sep-v"></span>
+    <span>{Object.keys(streams).length} stream attivi</span>
+    <span class="grow"></span>
+    <span>{server.interfaces.length} interfacce di rete</span>
+  </div>
+</div>
 
 <style>
-  main { font-family: system-ui, sans-serif; padding: 1.5rem; max-width: 1100px; margin: 0 auto; }
-  header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: 1rem; }
-  h1 { margin: 0; }
-  .server-banner { display: flex; align-items: center; gap: 0.6rem; background: #1a2a1a; border: 1px solid #00c864; padding: 0.5rem 0.8rem; border-radius: 6px; }
-  .server-banner .label { color: #888; font-size: 0.85rem; }
-  .server-banner code { color: #00c864; font-size: 0.95rem; cursor: pointer; user-select: all; }
-  .controls { display: flex; gap: 1rem; align-items: center; margin-bottom: 1rem; }
-  button { padding: 0.4rem 0.9rem; cursor: pointer; }
-  .auto-tag { color: #666; font-size: 0.8rem; font-style: italic; }
-  .count { color: #888; font-size: 0.9rem; }
-  .error { background: #5a1a1a; color: #ffc; padding: 0.6rem 1rem; border-radius: 4px; margin-bottom: 1rem; }
-  .window-list { list-style: none; padding: 0; margin: 0; }
-  .window-list li {
-    padding: 0.6rem 0.8rem;
-    border-bottom: 1px solid #2a2a2a;
-    display: grid;
-    grid-template-columns: auto 1fr auto auto;
-    gap: 0.8rem;
-    align-items: center;
+  :global(html), :global(body) {
+    margin: 0;
+    padding: 0;
+    background: #f0f0f0;
+    font-family: "Segoe UI", Tahoma, sans-serif;
+    font-size: 12px;
+    color: #000;
+    user-select: none;
   }
-  .window-list li.gba { background: rgba(0, 200, 100, 0.08); }
-  .badge { background: #00c864; color: black; font-weight: bold; padding: 0.15rem 0.5rem; border-radius: 4px; font-size: 0.8rem; }
-  .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .meta { color: #888; font-size: 0.8rem; font-family: monospace; }
-  .stream-live { display: flex; gap: 0.5rem; align-items: center; }
-  .stream-live code { color: #00c864; font-family: monospace; font-size: 0.85rem; cursor: pointer; user-select: all; background: #0a1a0a; padding: 0.2rem 0.5rem; border-radius: 3px; }
+
+  .app {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+  }
+
+  .titlebar {
+    background: linear-gradient(to bottom, #f7f7f7, #e4e4e4);
+    border-bottom: 1px solid #b0b0b0;
+    padding: 4px 8px;
+    font-weight: bold;
+    font-size: 13px;
+  }
+
+  .toolbar {
+    background: #ececec;
+    border-bottom: 1px solid #c0c0c0;
+    padding: 4px 6px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .toolbar .sep {
+    width: 1px;
+    height: 18px;
+    background: #c0c0c0;
+    margin: 0 4px;
+  }
+
+  .toolbar .info {
+    color: #555;
+    font-style: italic;
+  }
+
+  .chk {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+  }
+
+  .server-row {
+    background: #f5f5f5;
+    border-bottom: 1px solid #d0d0d0;
+    padding: 5px 8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .server-row label {
+    font-weight: bold;
+  }
+
+  .server-row select {
+    font-family: monospace;
+    padding: 1px 3px;
+    border: 1px solid #888;
+  }
+
+  .server-row code {
+    font-family: Consolas, monospace;
+    background: #fff;
+    border: 1px solid #c0c0c0;
+    padding: 2px 6px;
+    cursor: pointer;
+  }
+
+  .server-row code:hover {
+    background: #ffffcc;
+  }
+
+  .error-bar {
+    background: #ffe0e0;
+    border-bottom: 1px solid #c00;
+    color: #800;
+    padding: 4px 8px;
+    font-family: monospace;
+  }
+
+  .table-wrap {
+    flex: 1;
+    overflow: auto;
+    background: #fff;
+    border-top: 1px solid #888;
+    border-bottom: 1px solid #888;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+  }
+
+  thead {
+    position: sticky;
+    top: 0;
+  }
+
+  th {
+    background: linear-gradient(to bottom, #f7f7f7, #e0e0e0);
+    border-bottom: 1px solid #888;
+    border-right: 1px solid #c0c0c0;
+    padding: 3px 6px;
+    text-align: left;
+    font-weight: normal;
+  }
+
+  td {
+    border-bottom: 1px solid #eee;
+    border-right: 1px solid #f0f0f0;
+    padding: 3px 6px;
+    vertical-align: middle;
+  }
+
+  tbody tr:hover {
+    background: #e8f0fe;
+  }
+
+  tr.gba {
+    background: #fffbe0;
+  }
+
+  tr.gba:hover {
+    background: #fff5b0;
+  }
+
+  .slot-cell {
+    text-align: center;
+  }
+
+  .title-cell {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 0;
+  }
+
+  .mono {
+    font-family: Consolas, monospace;
+    color: #333;
+  }
+
+  .url {
+    font-family: Consolas, monospace;
+    background: #f0f0f0;
+    border: 1px solid #c0c0c0;
+    padding: 1px 4px;
+    margin-right: 4px;
+    cursor: pointer;
+    font-size: 11px;
+  }
+
+  .url:hover {
+    background: #ffffcc;
+  }
+
+  .empty {
+    text-align: center;
+    color: #888;
+    padding: 12px;
+    font-style: italic;
+  }
+
+  /* Bottoni stile Windows classico */
+  button {
+    background: linear-gradient(to bottom, #f5f5f5, #e0e0e0);
+    border: 1px solid #888;
+    padding: 2px 10px;
+    font-family: "Segoe UI", Tahoma, sans-serif;
+    font-size: 12px;
+    cursor: pointer;
+    min-height: 22px;
+  }
+
+  button:hover:not(:disabled) {
+    background: linear-gradient(to bottom, #fafafa, #e8e8e8);
+    border-color: #5b9ade;
+  }
+
+  button:active:not(:disabled) {
+    background: linear-gradient(to bottom, #d8d8d8, #ececec);
+  }
+
+  button:disabled {
+    color: #888;
+    cursor: not-allowed;
+  }
+
+  .statusbar {
+    background: #ececec;
+    border-top: 1px solid #c0c0c0;
+    padding: 3px 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    color: #444;
+  }
+
+  .statusbar .sep-v {
+    width: 1px;
+    height: 12px;
+    background: #b0b0b0;
+  }
+
+  .statusbar .grow {
+    flex: 1;
+  }
 </style>
