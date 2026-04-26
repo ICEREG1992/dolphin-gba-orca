@@ -108,16 +108,20 @@
   }
 
   async function startStream(w) {
-    if (!w.gba_slot) return;
-    error = "";
-    try {
-      await invoke("start_stream", { slot: w.gba_slot, windowTitle: w.title });
-      await refreshStreams();
-    } catch (e) {
-      error = String(e);
+      if (!w.gba_slot) return;
+      error = "";
+      try {
+        await invoke("start_stream", {
+          slot: w.gba_slot,
+          hwnd: w.hwnd,
+          windowTitle: w.title,
+        });
+        await refreshStreams();
+      } catch (e) {
+        error = String(e);
+      }
     }
-  }
-
+    
   async function stopStream(slot) {
     error = "";
     try {

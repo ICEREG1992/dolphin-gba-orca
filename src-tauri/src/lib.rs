@@ -23,7 +23,8 @@ use tokio_stream::wrappers::BroadcastStream;
 use windows::Win32::Foundation::{BOOL, HWND, LPARAM, RECT, TRUE};
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
-    GetWindowThreadProcessId, IsWindowVisible,
+    GetWindowThreadProcessId, IsWindowVisible, IsIconic, ShowWindow, SetWindowPos,
+    SW_SHOWNOACTIVATE, HWND_BOTTOM, SWP_NOMOVE, SWP_NOSIZE, SWP_NOACTIVATE,
 };
 
 // ============= WINDOW ENUMERATION =============
@@ -66,9 +67,6 @@ unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
     let height = rect.bottom - rect.top;
 
     // Salta finestre minimizzate (dimensione 0x0)
-    if width == 0 || height == 0 {
-        return TRUE;
-    }
 
     out.push(WindowInfo {
         hwnd: hwnd.0 as isize,
@@ -166,6 +164,7 @@ async fn start_stream(
     app: tauri::AppHandle,
     state: State<'_, SharedState>,
     slot: u8,
+    hwnd: isize,
     window_title: String,
 ) -> Result<StreamInfo, String> {
     if !(1..=4).contains(&slot) {
@@ -176,6 +175,24 @@ async fn start_stream(
         let sessions = state.sessions.lock().unwrap();
         if sessions.contains_key(&slot) {
             return Err(format!("Slot {} già in stream", slot));
+        }
+    }
+
+    // Se la finestra è minimizzata, ripristinala senza rubare il focus
+    // e mandala in fondo allo z-order così non copre il gioco principale.
+    unsafe {
+        let win = HWND(hwnd as *mut _);
+        if IsIconic(win).as_bool() {
+            let _ = ShowWindow(win, SW_SHOWNOACTIVATE);
+            let _ = SetWindowPos(
+                win,
+                HWND_BOTTOM,
+                0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
+            // Piccola pausa per dare tempo a Windows di ridisegnare la finestra
+            // prima che gdigrab provi a leggerla
+            tokio::time::sleep(Duration::from_millis(150)).await;
         }
     }
 
