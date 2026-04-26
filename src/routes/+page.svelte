@@ -177,8 +177,8 @@
   :global(html), :global(body) {
     margin: 0;
     padding: 0;
-    background: #f0f0f0;
-    font-family: "Segoe UI", Tahoma, sans-serif;
+    background: #f3f3f3; /* Classico sfondo grigio chiaro Win10 */
+    font-family: "Segoe UI", sans-serif;
     font-size: 12px;
     color: #000;
     user-select: none;
@@ -190,32 +190,32 @@
     height: 100vh;
   }
 
+  /* Layout Superiore */
   .titlebar {
-    background: linear-gradient(to bottom, #f7f7f7, #e4e4e4);
-    border-bottom: 1px solid #b0b0b0;
-    padding: 4px 8px;
-    font-weight: bold;
+    background: #fff;
+    border-bottom: 1px solid #e0e0e0;
+    padding: 6px 10px;
+    font-weight: 600;
     font-size: 13px;
   }
 
   .toolbar {
-    background: #ececec;
-    border-bottom: 1px solid #c0c0c0;
-    padding: 4px 6px;
+    background: #fff;
+    border-bottom: 1px solid #e0e0e0;
+    padding: 4px 10px;
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
   }
 
-  .toolbar .sep {
+  .sep {
     width: 1px;
-    height: 18px;
-    background: #c0c0c0;
-    margin: 0 4px;
+    height: 16px;
+    background: #e0e0e0;
   }
 
-  .toolbar .info {
-    color: #555;
+  .info {
+    color: #666;
     font-style: italic;
   }
 
@@ -226,90 +226,85 @@
     cursor: pointer;
   }
 
+  /* Riga Server */
   .server-row {
-    background: #f5f5f5;
-    border-bottom: 1px solid #d0d0d0;
-    padding: 5px 8px;
+    background: #fff;
+    border-bottom: 1px solid #e0e0e0;
+    padding: 6px 10px;
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
   }
 
   .server-row label {
-    font-weight: bold;
+    font-weight: 600;
   }
 
-  .server-row select {
-    font-family: monospace;
-    padding: 1px 3px;
-    border: 1px solid #888;
-  }
-
-  .server-row code {
-    font-family: Consolas, monospace;
+  /* Campi codice/URL unificati e piatti */
+  .server-row select,
+  .server-row code,
+  .url {
+    font-family: "Consolas", monospace;
     background: #fff;
-    border: 1px solid #c0c0c0;
+    border: 1px solid #ccc;
     padding: 2px 6px;
     cursor: pointer;
   }
 
-  .server-row code:hover {
-    background: #ffffcc;
+  .server-row code:hover,
+  .url:hover {
+    border-color: #0078d7; /* Azzurro Win10 */
+    background: #e5f1fb;
   }
 
+  /* Barra Errore */
   .error-bar {
-    background: #ffe0e0;
-    border-bottom: 1px solid #c00;
-    color: #800;
-    padding: 4px 8px;
-    font-family: monospace;
+    background: #fde7e9;
+    border-bottom: 1px solid #c42b1c;
+    color: #c42b1c;
+    padding: 4px 10px;
+    font-family: "Consolas", monospace;
   }
 
+  /* Tabella */
   .table-wrap {
     flex: 1;
     overflow: auto;
     background: #fff;
-    border-top: 1px solid #888;
-    border-bottom: 1px solid #888;
   }
 
   table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 12px;
-  }
-
-  thead {
-    position: sticky;
-    top: 0;
   }
 
   th {
-    background: linear-gradient(to bottom, #f7f7f7, #e0e0e0);
-    border-bottom: 1px solid #888;
-    border-right: 1px solid #c0c0c0;
-    padding: 3px 6px;
+    background: #f9f9f9;
+    border-bottom: 1px solid #e0e0e0;
+    padding: 6px 10px;
     text-align: left;
-    font-weight: normal;
+    font-weight: 600;
   }
 
   td {
-    border-bottom: 1px solid #eee;
-    border-right: 1px solid #f0f0f0;
-    padding: 3px 6px;
-    vertical-align: middle;
+    border-bottom: 1px solid #f0f0f0;
+    padding: 5px 10px;
   }
 
   tbody tr:hover {
-    background: #e8f0fe;
+    background: #e5f1fb; /* Selezione azzurra Win10 */
   }
 
+  /* GBA ORCA - Più grande e in evidenza */
   tr.gba {
-    background: #fffbe0;
+    background: #fff8e1;
+    font-size: 15px;      /* Font più grande */
+    font-weight: 600;     /* Grassetto */
+    padding: 10px;        /* Più spazio interno */
   }
 
   tr.gba:hover {
-    background: #fff5b0;
+    background: #ffecb3;
   }
 
   .slot-cell {
@@ -324,74 +319,60 @@
   }
 
   .mono {
-    font-family: Consolas, monospace;
-    color: #333;
-  }
-
-  .url {
-    font-family: Consolas, monospace;
-    background: #f0f0f0;
-    border: 1px solid #c0c0c0;
-    padding: 1px 4px;
-    margin-right: 4px;
-    cursor: pointer;
-    font-size: 11px;
-  }
-
-  .url:hover {
-    background: #ffffcc;
+    font-family: "Consolas", monospace;
   }
 
   .empty {
     text-align: center;
     color: #888;
-    padding: 12px;
+    padding: 16px;
     font-style: italic;
   }
 
-  /* Bottoni stile Windows classico */
+  /* Bottoni Stile Win10 */
   button {
-    background: linear-gradient(to bottom, #f5f5f5, #e0e0e0);
-    border: 1px solid #888;
-    padding: 2px 10px;
-    font-family: "Segoe UI", Tahoma, sans-serif;
+    background: #fff;
+    border: 1px solid #999;
+    padding: 4px 12px;
+    font-family: "Segoe UI", sans-serif;
     font-size: 12px;
     cursor: pointer;
-    min-height: 22px;
   }
 
   button:hover:not(:disabled) {
-    background: linear-gradient(to bottom, #fafafa, #e8e8e8);
-    border-color: #5b9ade;
+    background: #e6e6e6;
+    border-color: #0078d7;
   }
 
   button:active:not(:disabled) {
-    background: linear-gradient(to bottom, #d8d8d8, #ececec);
+    background: #cccccc;
   }
 
   button:disabled {
-    color: #888;
+    color: #aaa;
     cursor: not-allowed;
+    background: #f5f5f5;
   }
 
+  /* StatusBar */
   .statusbar {
-    background: #ececec;
-    border-top: 1px solid #c0c0c0;
-    padding: 3px 8px;
+    background: #f3f3f3;
+    border-top: 1px solid #e0e0e0;
+    padding: 4px 10px;
     display: flex;
     align-items: center;
     gap: 8px;
     font-size: 11px;
-    color: #444;
+    color: #555;
   }
 
-  .statusbar .sep-v {
+  .sep-v {
     width: 1px;
     height: 12px;
-    background: #b0b0b0;
+    background: #d0d0d0;
   }
 
-  .statusbar .grow {
+  .grow {
     flex: 1;
   }
 </style>
