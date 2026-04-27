@@ -8,6 +8,7 @@ When you play GameCube games that use GBA-link features, Dolphin opens separate 
 
 ```
 [Dolphin] ──GBA windows──▶ [GBA Orca on Windows] ──HTTP──▶ [Phones / tablets]
+
 [Dolphin] ──GBA windows──▶ [GBA Orca on Windows] ──WebRTC──▶ [Phones / tablets]
 ```
 
