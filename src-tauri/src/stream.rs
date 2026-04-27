@@ -12,7 +12,7 @@ use tokio::sync::watch;
 
 use crate::mediamtx;
 use crate::network::{HTTP_PORT, MEDIAMTX_RTMP_PORT, MEDIAMTX_WEBRTC_PORT};
-use crate::windows_api::{is_window_alive, is_window_minimized, restore_window_silent};
+use crate::platform::{is_window_alive, is_window_minimized, restore_window_silent};
 use crate::SharedState;
 
 const INGEST_BUFFER_SIZE: usize = 64 * 1024;
@@ -326,20 +326,43 @@ async fn keepalive_loop(slot: u8, hwnd: isize, state: SharedState) {
     }
 }
 
-/// Build the full FFmpeg arg list for a given mode. Common args (capture
-/// device, framerate, input title) are listed once; per-mode args cover the
-/// video filter, codec, pixel format, and output muxer.
-fn build_ffmpeg_args(mode: &StreamMode, title_arg: &str, output_url: &str) -> Vec<String> {
-    let common: &[&str] = &[
+/// Platform-specific FFmpeg input args: which capture device, how the
+/// target window is identified. On Windows that's `gdigrab` + `-i title=`;
+/// on Linux X11 that's `x11grab` + `-window_id` (XComposite-tracked) with
+/// the X display as the input URL. Everything else (codec, filter, muxer)
+/// is shared across platforms in `build_ffmpeg_args`.
+#[cfg(windows)]
+fn capture_input_args(_hwnd: isize, title: &str) -> Vec<String> {
+    vec![
+        "-f".into(), "gdigrab".into(),
+        "-framerate".into(), "30".into(),
+        "-i".into(), format!("title={}", title),
+    ]
+}
+
+#[cfg(target_os = "linux")]
+fn capture_input_args(hwnd: isize, _title: &str) -> Vec<String> {
+    let display = std::env::var("DISPLAY").unwrap_or_else(|_| ":0".into());
+    vec![
+        "-f".into(), "x11grab".into(),
+        "-framerate".into(), "30".into(),
+        "-window_id".into(), format!("0x{:x}", hwnd as u32),
+        "-i".into(), display,
+    ]
+}
+
+/// Build the full FFmpeg arg list for a given mode. Capture input args are
+/// platform-specific (gdigrab/x11grab); per-mode args cover the video filter,
+/// codec, pixel format, and output muxer.
+fn build_ffmpeg_args(mode: &StreamMode, hwnd: isize, window_title: &str, output_url: &str) -> Vec<String> {
+    let prelude: &[&str] = &[
         "-hide_banner",
         "-loglevel", "info",
         "-nostats",
         "-probesize", "32",
         "-analyzeduration", "0",
-        "-f", "gdigrab",
-        "-framerate", "30",
-        "-i", title_arg,
     ];
+    let capture = capture_input_args(hwnd, window_title);
     let specific: &[&str] = match mode {
         StreamMode::Mjpeg => &[
             "-vf", "mpdecimate=max=30",
@@ -380,10 +403,11 @@ fn build_ffmpeg_args(mode: &StreamMode, title_arg: &str, output_url: &str) -> Ve
             "-f", "flv",
         ],
     };
-    common
+    prelude
         .iter()
-        .chain(specific.iter())
         .map(|s| (*s).to_string())
+        .chain(capture.into_iter())
+        .chain(specific.iter().map(|s| (*s).to_string()))
         .chain(std::iter::once(output_url.to_string()))
         .collect()
 }
@@ -428,7 +452,6 @@ pub async fn start_stream(
         (None, None)
     };
 
-    let title_arg = format!("title={}", window_title);
     let output_url = if stream_mode.is_webrtc() {
         format!("rtmp://127.0.0.1:{}/slot{}", MEDIAMTX_RTMP_PORT, slot)
     } else {
@@ -437,7 +460,7 @@ pub async fn start_stream(
 
     let sidecar = app.shell().sidecar("ffmpeg")
         .map_err(|e| format!("ffmpeg sidecar non trovato: {}", e))?;
-    let args = build_ffmpeg_args(&stream_mode, &title_arg, &output_url);
+    let args = build_ffmpeg_args(&stream_mode, hwnd, &window_title, &output_url);
     let (mut rx, child) = sidecar.args(args).spawn()
         .map_err(|e| format!("spawn fallito: {}", e))?;
 

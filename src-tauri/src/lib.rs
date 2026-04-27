@@ -7,7 +7,18 @@ mod http;
 mod mediamtx;
 mod network;
 mod stream;
+
+#[cfg(windows)]
 mod windows_api;
+#[cfg(target_os = "linux")]
+mod x11_api;
+
+mod platform {
+    #[cfg(windows)]
+    pub use crate::windows_api::*;
+    #[cfg(target_os = "linux")]
+    pub use crate::x11_api::*;
+}
 
 use mediamtx::MediamtxState;
 use stream::StreamSession;
@@ -21,6 +32,7 @@ pub(crate) struct SharedState {
 /// Create a Windows Job Object with KILL_ON_JOB_CLOSE and assign the current
 /// process to it. All child processes (FFmpeg, MediaMTX) automatically join,
 /// so when this process exits — even forcefully — the kernel terminates them.
+#[cfg(windows)]
 fn setup_job_object() {
     use windows::core::PCWSTR;
     use windows::Win32::Foundation::HANDLE;
@@ -69,6 +81,7 @@ fn setup_job_object() {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(windows)]
     setup_job_object();
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -89,8 +102,8 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            windows_api::list_windows,
-            windows_api::list_gba_windows,
+            platform::list_windows,
+            platform::list_gba_windows,
             stream::start_stream,
             stream::stop_stream,
             stream::list_streams,
