@@ -14,6 +14,8 @@ mod windows_api;
 mod x11_api;
 #[cfg(target_os = "linux")]
 mod wayland_api;
+#[cfg(target_os = "linux")]
+mod pipewire_capture;
 
 mod platform {
     #[cfg(windows)]

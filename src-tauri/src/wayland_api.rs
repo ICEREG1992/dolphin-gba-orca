@@ -5,17 +5,27 @@
 //! and then assigns each captured source to a slot inside the app.
 //!
 //! Streaming reuses the FFmpeg+MediaMTX pipeline; the only difference is the
-//! capture-input args (`-f libpipewire -i <node_id>`).
+//! capture-input args (`-f libpipewire -i <node_id>`) **when** the bundled
+//! FFmpeg is built with libpipewire support.  If it is not, the caller must
+//! read raw frames via `pipewire_capture` and feed them to FFmpeg on stdin.
 //!
-//! Requires a recent FFmpeg built with libpipewire support.
-use std::os::fd::OwnedFd;
+//! To keep the portal grant alive for the whole streaming lifetime we store
+//! the portal proxy + session inside `WaylandData` instead of dropping them
+//! after `wayland_select_sources` returns.
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::sync::{Arc, Mutex};
 
 use ashpd::desktop::screencast::{CursorMode, Screencast, SourceType};
+use ashpd::WindowIdentifier;
 use ashpd::desktop::PersistMode;
 use ashpd::enumflags2::BitFlags;
 use serde::Serialize;
 use tauri::State;
+
+// We keep the proxy + session alive for the lifetime of the selection so the
+// portal grant doesn't disappear.  They are boxed to avoid naming the exact
+// private/generic types in our state struct.
+type PortalBox = Box<dyn std::any::Any + Send + Sync>;
 
 /// Detect a Wayland session. True when WAYLAND_DISPLAY is set or
 /// XDG_SESSION_TYPE indicates wayland — covers GNOME/KDE/sway logins.
@@ -39,9 +49,9 @@ pub struct WaylandSource {
 #[derive(Default)]
 struct Inner {
     sources: Vec<WaylandSource>,
-    /// PipeWire FD opened on the portal session. Held for the process
-    /// lifetime so the granted streams remain usable. Replaced on each
-    /// `wayland_select_sources` call.
+    /// Opaque handle that keeps the portal session alive.
+    _portal: Option<PortalBox>,
+    /// PipeWire FD opened on the portal session.
     _pipewire_fd: Option<OwnedFd>,
     next_id: u64,
 }
@@ -64,6 +74,20 @@ impl WaylandData {
             .find(|s| s.id == id)
             .map(|s| (s.node_id, s.label.clone()))
     }
+
+    /// Duplicate the PipeWire FD so the capture thread can open its own
+    /// connection while the portal session (and its FD) stays alive here.
+    pub fn dup_fd(&self) -> Option<OwnedFd> {
+        let g = self.0.lock().unwrap();
+        g._pipewire_fd.as_ref().map(|fd| {
+            let raw = fd.as_raw_fd();
+            let new_raw = unsafe { libc::dup(raw) };
+            if new_raw < 0 {
+                panic!("dup(pipewire_fd) failed");
+            }
+            unsafe { OwnedFd::from_raw_fd(new_raw) }
+        })
+    }
 }
 
 #[tauri::command]
@@ -73,7 +97,7 @@ pub fn wayland_list_sources(state: State<'_, WaylandData>) -> Vec<WaylandSource>
 
 /// Open the xdg-desktop-portal ScreenCast dialog so the user can pick the
 /// GBA windows. Returns the captured sources. Replaces any previous
-/// selection — closes the prior PipeWire FD on drop.
+/// selection — dropping the prior portal session on the way out.
 #[tauri::command]
 pub async fn wayland_select_sources(
     state: State<'_, WaylandData>,
@@ -99,7 +123,7 @@ pub async fn wayland_select_sources(
         .map_err(|e| format!("select sources: {}", e))?;
 
     let response = proxy
-        .start(&session, None)
+        .start(&session, &WindowIdentifier::None)
         .await
         .map_err(|e| format!("portal start: {}", e))?
         .response()
@@ -113,20 +137,29 @@ pub async fn wayland_select_sources(
     let mut g = state.0.lock().unwrap();
     g.sources.clear();
     let mut out = Vec::new();
-    for s in response.streams() {
+    // Portals often return streams in reverse selection order (LIFO).
+    // Reverse so the first window the user clicked becomes GBA1.
+    let streams: Vec<_> = response.streams().to_vec();
+    for (idx, s) in streams.into_iter().rev().enumerate() {
         g.next_id += 1;
         let id = g.next_id;
         let node_id = s.pipe_wire_node_id();
-        let label = format!("Source #{}", node_id);
+        // Auto-assign slot 1..4 in selection order so the user doesn't have
+        // to manually map each source.
+        let auto_slot = if idx < 4 { Some((idx + 1) as u8) } else { None };
+        let label = format!("Source #{} (GBA{})", node_id, idx + 1);
         let src = WaylandSource {
             id,
             label,
             node_id,
-            gba_slot: None,
+            gba_slot: auto_slot,
         };
         g.sources.push(src.clone());
         out.push(src);
     }
+    // Box the proxy + session together so they stay alive (and the portal
+    // grant remains valid) for the lifetime of this selection.
+    g._portal = Some(Box::new((proxy, session)) as PortalBox);
     g._pipewire_fd = Some(fd);
     eprintln!("[wayland] portal returned {} source(s)", out.len());
     Ok(out)

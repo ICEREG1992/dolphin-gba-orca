@@ -33,6 +33,7 @@
       noWaylandSourcesYet: "Nessuna sorgente selezionata. Clicca sopra per aprire il portal.",
       assignSlot: "Assegna",
       sourceLabel: "Sorgente",
+      waylandBanner: "WAYLAND — Seleziona nell'ordine: GBA1, GBA2, GBA3, GBA4",
     },
     en: {
       refresh: "Refresh",
@@ -63,6 +64,7 @@
       noWaylandSourcesYet: "No source selected yet. Click the button above to open the portal.",
       assignSlot: "Assign",
       sourceLabel: "Source",
+      waylandBanner: "WAYLAND — Select in order: GBA1, GBA2, GBA3, GBA4",
     },
   };
 
@@ -257,9 +259,24 @@
     GBA Orca
   </div>
 
+  {#if isWayland}
+    <div class="wayland-banner">
+      <span class="wayland-alert">WAYLAND rilevato</span>
+      {#if lang === 'it'}
+        <span class="wayland-text"> — Seleziona nell'ordine: </span>
+      {:else}
+        <span class="wayland-text"> — Select in order: </span>
+      {/if}
+      <span class="wayland-slot">GBA1</span><span class="wayland-text">, </span>
+      <span class="wayland-slot">GBA2</span><span class="wayland-text">, </span>
+      <span class="wayland-slot">GBA3</span><span class="wayland-text">, </span>
+      <span class="wayland-slot">GBA4</span>
+    </div>
+  {/if}
+
   <div class="toolbar">
     {#if isWayland}
-      <button on:click={selectWaylandSources} disabled={waylandBusy}>
+      <button class="primary-btn" on:click={selectWaylandSources} disabled={waylandBusy}>
         {t.selectGbaWindows}
       </button>
     {:else}
@@ -317,7 +334,9 @@
 
   <div class="table-wrap">
     {#if isWayland}
-      <div class="wayland-hint">{t.waylandHint}</div>
+      {#if waylandSources.length === 0}
+        <div class="wayland-hint">{t.waylandHint}</div>
+      {/if}
       <table>
         <thead>
           <tr>
@@ -331,7 +350,11 @@
           {#each waylandSources as src (src.id)}
             <tr class:gba={src.gba_slot}>
               <td class="slot-cell">
-                {#if src.gba_slot}<b>GBA{src.gba_slot}</b>{/if}
+                {#if src.gba_slot}
+                  <span class="slot-badge">GBA{src.gba_slot}</span>
+                {:else}
+                  <span class="slot-badge empty">—</span>
+                {/if}
               </td>
               <td class="title-cell" title={src.label}>{src.label}</td>
               <td>
@@ -655,5 +678,66 @@
     padding: 6px 10px;
     color: #555;
     font-style: italic;
+  }
+
+  .wayland-banner {
+    background: #fff8e1;
+    border-bottom: 2px solid #f9a825;
+    padding: 8px 12px;
+    font-size: 13px;
+    letter-spacing: 0.2px;
+  }
+
+  .wayland-alert {
+    color: #d32f2f;
+    font-weight: 700;
+    text-transform: uppercase;
+  }
+
+  .wayland-text {
+    color: #4a3400;
+    font-weight: 600;
+  }
+
+  .wayland-slot {
+    color: #bf360c;
+    font-weight: 700;
+  }
+
+  .primary-btn {
+    background: #0078d7;
+    border: 1px solid #005a9e;
+    color: #fff;
+    padding: 5px 16px;
+    font-size: 13px;
+    font-weight: 600;
+    box-shadow: 0 1px 3px rgba(0,120,215,0.35);
+    transition: background 0.1s ease, box-shadow 0.1s ease;
+  }
+
+  .primary-btn:hover:not(:disabled) {
+    background: #106ebe;
+    border-color: #005a9e;
+    box-shadow: 0 2px 6px rgba(0,120,215,0.45);
+  }
+
+  .primary-btn:active:not(:disabled) {
+    background: #005a9e;
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.2);
+  }
+
+  .slot-badge {
+    display: inline-block;
+    background: #0078d7;
+    color: #fff;
+    font-weight: 700;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 10px;
+  }
+
+  .slot-badge.empty {
+    background: #e0e0e0;
+    color: #888;
   }
 </style>

@@ -50,7 +50,7 @@ impl StreamMode {
 pub struct StreamSession {
     pub title: String,
     pub mode: StreamMode,
-    pub child: CommandChild,
+    pub backend: CaptureBackend,
     /// Latest-frame channel for MJPEG viewers. Each frame published here
     /// replaces the previous one — slow viewers always jump to the newest
     /// frame instead of accumulating a backlog. None for WebRTC sessions.
@@ -59,10 +59,38 @@ pub struct StreamSession {
     /// X11/Win32 keepalive task that watches the source HWND. None on
     /// Wayland (no HWND — FFmpeg EOF handles cleanup instead).
     pub keepalive_task: Option<tauri::async_runtime::JoinHandle<()>>,
+    /// Optional extra cleanup for platform-specific resources (e.g. PipeWire pump).
+    pub on_shutdown: Option<Box<dyn FnOnce() + Send>>,
+}
+
+/// Capture backend for a stream session.
+pub enum CaptureBackend {
+    /// FFmpeg sidecar path (X11 / Win32). Uses Tauri CommandChild.
+    Ffmpeg {
+        child: Arc<std::sync::Mutex<Option<CommandChild>>>,
+    },
+    /// FFmpeg spawned via std::process (Wayland raw stdin path).
+    #[cfg(target_os = "linux")]
+    FfmpegStd {
+        child: Arc<std::sync::Mutex<Option<std::process::Child>>>,
+    },
 }
 
 pub fn shutdown_session(session: StreamSession) {
-    let _ = session.child.kill();
+    if let Some(f) = session.on_shutdown { f(); }
+    match session.backend {
+        CaptureBackend::Ffmpeg { child } => {
+            if let Some(c) = child.lock().unwrap().take() {
+                let _ = c.kill();
+            }
+        }
+        #[cfg(target_os = "linux")]
+        CaptureBackend::FfmpegStd { child } => {
+            if let Some(mut c) = child.lock().unwrap().take() {
+                let _ = c.kill();
+            }
+        }
+    }
     if let Some(task) = session.ingest_task { task.abort(); }
     if let Some(task) = session.keepalive_task { task.abort(); }
 }
@@ -173,7 +201,7 @@ impl MjpegParser {
 /// Wrap a single JPEG frame in the multipart envelope expected by browsers
 /// reading `multipart/x-mixed-replace; boundary=ffmpeg`. One allocation per
 /// frame; the resulting `Bytes` is then Arc-shared across all viewers.
-fn wrap_multipart(jpeg: Bytes) -> Bytes {
+pub fn wrap_multipart(jpeg: Bytes) -> Bytes {
     let len_str = jpeg.len().to_string();
     let mut out = BytesMut::with_capacity(jpeg.len() + 64 + len_str.len());
     out.extend_from_slice(b"--ffmpeg\r\nContent-Type: image/jpeg\r\nContent-Length: ");
@@ -464,6 +492,7 @@ async fn launch_stream(
     let args = build_ffmpeg_args_with_capture(&stream_mode, capture_args, &output_url);
     let (mut rx, child) = sidecar.args(args).spawn()
         .map_err(|e| format!("spawn fallito: {}", e))?;
+    let child = Arc::new(std::sync::Mutex::new(Some(child)));
 
     let ingest_task = match (listener, frame_tx.clone()) {
         (Some(l), Some(tx)) => Some(tauri::async_runtime::spawn(async move {
@@ -489,15 +518,16 @@ async fn launch_stream(
     state.sessions.lock().unwrap().insert(slot, StreamSession {
         title,
         mode: stream_mode,
-        child,
+        backend: CaptureBackend::Ffmpeg { child: Arc::clone(&child) },
         frame_tx,
         ingest_task,
         keepalive_task,
+        on_shutdown: None,
     });
 
     // Spawn the FFmpeg event watcher. Inserted into the sessions map first so
     // a fast-fail FFmpeg termination still finds the session to clean up.
-    let state_for_ff = state.clone();
+    let state_for_ff = Clone::clone(state);
     tauri::async_runtime::spawn(async move {
         while let Some(event) = rx.recv().await {
             match event {
@@ -540,11 +570,36 @@ pub async fn start_stream(
     launch_stream(&app, state.inner(), slot, window_title, stream_mode, capture, Some(hwnd)).await
 }
 
-/// Wayland portal capture path. The user must first call
-/// `wayland_select_sources` to grant access; this command then takes the
-/// captured PipeWire node id (looked up via WaylandData) and feeds it to
-/// FFmpeg's `libpipewire` input device. No keepalive — FFmpeg EOF on the
-/// PipeWire stream triggers cleanup.
+/// Resolve the FFmpeg binary path from the current executable's directory.
+#[cfg(target_os = "linux")]
+fn resolve_ffmpeg_path() -> Result<std::path::PathBuf, String> {
+    let exe = std::env::current_exe().map_err(|e| format!("current_exe: {}", e))?;
+    let dir = exe.parent().ok_or("no parent dir")?;
+    let path = dir.join("binaries").join("ffmpeg-x86_64-unknown-linux-gnu");
+    if path.exists() {
+        return Ok(path);
+    }
+    let output = std::process::Command::new("which")
+        .arg("ffmpeg")
+        .output()
+        .map_err(|e| format!("which ffmpeg: {}", e))?;
+    if output.status.success() {
+        let p = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !p.is_empty() {
+            return Ok(std::path::PathBuf::from(p));
+        }
+    }
+    Err("FFmpeg not found".into())
+}
+
+/// Wayland portal capture path using native PipeWire frame reading.
+/// The user must first call `wayland_select_sources` to grant access;
+/// this command then reads frames from the PipeWire stream directly.
+///
+/// Unlike X11/Win32, the portal often returns the *full monitor resolution*
+/// (e.g. 8192x4608).  FFmpeg is therefore fed rawvideo on stdin and a
+/// `fps=30,scale=240:160:flags=fast_bilinear` pre-filter is injected so the
+/// encoder never has to process more than GBA-sized frames.
 #[cfg(target_os = "linux")]
 #[tauri::command]
 pub async fn start_wayland_stream(
@@ -560,16 +615,216 @@ pub async fn start_wayland_stream(
     }
     let stream_mode = StreamMode::parse(&mode)?;
 
+    if state.sessions.lock().unwrap().contains_key(&slot) {
+        return Err(format!("Slot {} già in stream", slot));
+    }
+
     let (node_id, label) = wayland
         .lookup(source_id)
         .ok_or_else(|| format!("Wayland source {} non trovato", source_id))?;
 
-    let capture = vec![
-        "-f".into(), "libpipewire".into(),
-        "-framerate".into(), "30".into(),
-        "-i".into(), node_id.to_string(),
+    let fd = wayland
+        .dup_fd()
+        .ok_or("Nessun PipeWire FD disponibile — eseguire wayland_select_sources prima")?;
+
+    // Probe the negotiated format on a blocking thread so we know exactly
+    // what width/height/pix_fmt to tell FFmpeg.
+    let format = tokio::task::spawn_blocking(move || {
+        crate::pipewire_capture::probe_format(fd, node_id)
+    })
+    .await
+    .map_err(|e| format!("probe join: {}", e))??;
+
+    eprintln!(
+        "[wayland slot {}] probed format: {}x{} {}",
+        slot, format.width, format.height, format.pix_fmt
+    );
+
+    if stream_mode.is_webrtc() {
+        mediamtx::ensure(&app, &state).await?;
+    }
+
+    // MJPEG needs the local TCP ingest listener + watch channel.
+    let (frame_tx, listener) = if matches!(stream_mode, StreamMode::Mjpeg) {
+        let port = ingest_port_for_slot(slot);
+        let listener = TcpListener::bind(("127.0.0.1", port))
+            .await
+            .map_err(|e| format!("Bind ingest port {}: {}", port, e))?;
+        let (tx, _) = watch::channel::<Option<Bytes>>(None);
+        (Some(Arc::new(tx)), Some(listener))
+    } else {
+        (None, None)
+    };
+
+    let output_url = if stream_mode.is_webrtc() {
+        format!("rtmp://127.0.0.1:{}/slot{}", MEDIAMTX_RTMP_PORT, slot)
+    } else {
+        format!("tcp://127.0.0.1:{}", ingest_port_for_slot(slot))
+    };
+
+    // Pre-filter: clamp to 30 fps and scale to HD immediately so the encoder
+    // never has to chew on 8K raw frames.  `fast_bilinear` is the cheapest
+    // software scaler and keeps CPU usage low.
+    let prefilter = "fps=30,scale=1280:-2:flags=fast_bilinear";
+
+    let mut args: Vec<String> = vec![
+        "-hide_banner".into(), "-loglevel".into(), "info".into(), "-nostats".into(),
+        "-fflags".into(), "nobuffer".into(),
+        "-probesize".into(), "32".into(),
+        "-analyzeduration".into(), "0".into(),
+        "-thread_queue_size".into(), "512".into(),
+        "-f".into(), "rawvideo".into(),
+        "-pix_fmt".into(), format.pix_fmt.into(),
+        "-s".into(), format!("{}x{}", format.width, format.height),
+        "-r".into(), "30".into(),
+        "-i".into(), "pipe:0".into(),
     ];
-    launch_stream(&app, state.inner(), slot, label, stream_mode, capture, None).await
+
+    match stream_mode {
+        StreamMode::Mjpeg => {
+            args.extend([
+                "-vf".into(), prefilter.into(),
+                "-c:v".into(), "mjpeg".into(),
+                "-q:v".into(), "5".into(),
+                "-flush_packets".into(), "1".into(),
+                "-f".into(), "mpjpeg".into(),
+            ]);
+        }
+        StreamMode::Webrtc => {
+            args.extend([
+                "-vf".into(), format!("{},scale=trunc(iw/2)*2:trunc(ih/2)*2", prefilter),
+                "-c:v".into(), "libx264".into(),
+                "-preset".into(), "ultrafast".into(),
+                "-tune".into(), "zerolatency".into(),
+                "-g".into(), "30".into(),
+                "-b:v".into(), "2M".into(),
+                "-pix_fmt".into(), "yuv420p".into(),
+                "-f".into(), "flv".into(),
+            ]);
+        }
+        StreamMode::WebrtcPlus => {
+            args.extend([
+                "-vf".into(), format!("{},scale=1920:-2:flags=neighbor", prefilter),
+                "-c:v".into(), "libx264".into(),
+                "-preset".into(), "fast".into(),
+                "-tune".into(), "zerolatency".into(),
+                "-crf".into(), "18".into(),
+                "-pix_fmt".into(), "yuv420p".into(),
+                "-g".into(), "30".into(),
+                "-f".into(), "flv".into(),
+            ]);
+        }
+        StreamMode::WebrtcVp9 => {
+            args.extend([
+                "-vf".into(), format!("{},scale=1920:-2:flags=neighbor", prefilter),
+                "-c:v".into(), "libvpx-vp9".into(),
+                "-crf".into(), "18".into(),
+                "-b:v".into(), "0".into(),
+                "-pix_fmt".into(), "yuv444p".into(),
+                "-g".into(), "30".into(),
+                "-tune-content".into(), "screen".into(),
+                "-f".into(), "flv".into(),
+            ]);
+        }
+    }
+    args.push(output_url);
+
+    let ffmpeg_path = resolve_ffmpeg_path()?;
+    let mut child = std::process::Command::new(&ffmpeg_path)
+        .args(&args)
+        .stdin(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("FFmpeg spawn: {}", e))?;
+
+    let stdin = child.stdin.take().ok_or("FFmpeg stdin not available")?;
+    let stderr = child.stderr.take().ok_or("FFmpeg stderr not available")?;
+
+    // Log FFmpeg stderr on a dedicated thread.
+    let slot_for_log = slot;
+    std::thread::spawn(move || {
+        use std::io::{BufRead, BufReader};
+        for line in BufReader::new(stderr).lines().flatten() {
+            eprintln!("[ffmpeg slot {}] {}", slot_for_log, line);
+        }
+    });
+
+    let child = Arc::new(std::sync::Mutex::new(Some(child)));
+
+    let ingest_task = match (listener, frame_tx.clone()) {
+        (Some(l), Some(tx)) => Some(tauri::async_runtime::spawn(async move {
+            ingest_loop(slot, l, tx).await;
+        })),
+        _ => None,
+    };
+
+    let info = StreamInfo {
+        slot,
+        title: label.clone(),
+        mode: stream_mode.clone(),
+        url: stream_url(slot, &stream_mode),
+    };
+
+    // PipeWire raw-frame pump writes directly into FFmpeg stdin (zero-copy,
+    // zero buffering through Rust channels).
+    let fd2 = wayland
+        .dup_fd()
+        .ok_or("FD non disponibile per pump")?;
+    let pump_slot = slot;
+    let pump_handle: Arc<std::sync::Mutex<Option<crate::pipewire_capture::PipewirePumpHandle>>> =
+        Arc::new(std::sync::Mutex::new(None));
+    let pump_handle_spawn = Arc::clone(&pump_handle);
+    let mut stdin_writer = stdin;
+    tokio::task::spawn_blocking(move || {
+        let writer = Box::new(move |data: &[u8]| {
+            use std::io::Write;
+            stdin_writer.write_all(data).is_ok()
+        }) as Box<dyn FnMut(&[u8]) -> bool + Send>;
+        match crate::pipewire_capture::start_raw_pump(fd2, node_id, writer) {
+            Ok(h) => {
+                *pump_handle_spawn.lock().unwrap() = Some(h);
+            }
+            Err(e) => {
+                eprintln!("[pw pump slot {}] start failed: {}", pump_slot, e);
+            }
+        }
+    });
+
+    let on_shutdown = {
+        let pump = Arc::clone(&pump_handle);
+        Some(Box::new(move || {
+            if let Some(mut h) = pump.lock().unwrap().take() {
+                h.stop();
+            }
+        }) as Box<dyn FnOnce() + Send>)
+    };
+
+    state.sessions.lock().unwrap().insert(slot, StreamSession {
+        title: label.clone(),
+        mode: stream_mode.clone(),
+        backend: CaptureBackend::FfmpegStd {
+            child: Arc::clone(&child),
+        },
+        frame_tx,
+        ingest_task,
+        keepalive_task: None,
+        on_shutdown,
+    });
+
+    // Watch for FFmpeg process exit and clean up the session.
+    let state_for_ff = state.inner().clone();
+    let watch_slot = slot;
+    tauri::async_runtime::spawn(async move {
+        let _ = tokio::task::spawn_blocking(move || {
+            if let Some(mut c) = child.lock().unwrap().take() {
+                let _ = c.wait();
+            }
+        }).await;
+        eprintln!("[ffmpeg slot {}] exited", watch_slot);
+        remove_and_cleanup(&state_for_ff, watch_slot);
+    });
+
+    Ok(info)
 }
 
 #[tauri::command]
