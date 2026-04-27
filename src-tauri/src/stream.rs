@@ -1,21 +1,25 @@
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
-use bytes::Bytes;
+use bytes::{Buf, Bytes, BytesMut};
 use serde::Serialize;
 use tauri::State;
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpListener;
-use tokio::sync::broadcast;
+use tokio::sync::watch;
 
 use crate::mediamtx;
 use crate::network::{HTTP_PORT, MEDIAMTX_RTMP_PORT, MEDIAMTX_WEBRTC_PORT};
 use crate::windows_api::{is_window_alive, is_window_minimized, restore_window_silent};
 use crate::SharedState;
 
-const BROADCAST_CAPACITY: usize = 32;
 const INGEST_BUFFER_SIZE: usize = 64 * 1024;
+const PARSER_CAPACITY: usize = 256 * 1024;
+const STATS_LOG_EVERY_N_FRAMES: u64 = 60;
+
+pub type FrameSender = Arc<watch::Sender<Option<Bytes>>>;
 
 pub fn ingest_port_for_slot(slot: u8) -> u16 { 9000 + slot as u16 }
 
@@ -47,7 +51,10 @@ pub struct StreamSession {
     pub title: String,
     pub mode: StreamMode,
     pub child: CommandChild,
-    pub sender: Option<broadcast::Sender<Bytes>>,
+    /// Latest-frame channel for MJPEG viewers. Each frame published here
+    /// replaces the previous one — slow viewers always jump to the newest
+    /// frame instead of accumulating a backlog. None for WebRTC sessions.
+    pub frame_tx: Option<FrameSender>,
     pub ingest_task: Option<tauri::async_runtime::JoinHandle<()>>,
     pub keepalive_task: tauri::async_runtime::JoinHandle<()>,
 }
@@ -117,7 +124,135 @@ pub fn shutdown_all(state: &SharedState) {
     }
 }
 
-async fn ingest_loop(slot: u8, listener: TcpListener, sender: broadcast::Sender<Bytes>) {
+/// Incremental parser for FFmpeg's `mpjpeg` muxer output.
+///
+/// Each frame is emitted as `--ffmpeg\r\nContent-type: image/jpeg\r\n
+/// Content-length: N\r\n\r\n<N bytes>\r\n`. We don't care about the boundary
+/// or trailers — we just look for the next blank line that ends a header
+/// block, parse Content-length, and emit the next N bytes as one JPEG frame.
+struct MjpegParser {
+    buf: BytesMut,
+    state: ParserState,
+}
+
+#[derive(Clone, Copy)]
+enum ParserState {
+    Headers,
+    Body { remaining: usize },
+}
+
+impl MjpegParser {
+    fn new() -> Self {
+        Self { buf: BytesMut::with_capacity(PARSER_CAPACITY), state: ParserState::Headers }
+    }
+
+    fn feed<F: FnMut(Bytes)>(&mut self, data: &[u8], mut on_frame: F) -> Result<(), &'static str> {
+        self.buf.extend_from_slice(data);
+        loop {
+            match self.state {
+                ParserState::Headers => {
+                    let Some(end) = find_double_crlf(&self.buf) else { return Ok(()); };
+                    let len = parse_content_length(&self.buf[..end])
+                        .ok_or("missing or unparseable Content-length")?;
+                    self.buf.advance(end + 4);
+                    self.state = ParserState::Body { remaining: len };
+                }
+                ParserState::Body { remaining } => {
+                    if self.buf.len() < remaining { return Ok(()); }
+                    let frame = self.buf.split_to(remaining).freeze();
+                    self.state = ParserState::Headers;
+                    on_frame(frame);
+                }
+            }
+        }
+    }
+}
+
+/// Wrap a single JPEG frame in the multipart envelope expected by browsers
+/// reading `multipart/x-mixed-replace; boundary=ffmpeg`. One allocation per
+/// frame; the resulting `Bytes` is then Arc-shared across all viewers.
+fn wrap_multipart(jpeg: Bytes) -> Bytes {
+    let len_str = jpeg.len().to_string();
+    let mut out = BytesMut::with_capacity(jpeg.len() + 64 + len_str.len());
+    out.extend_from_slice(b"--ffmpeg\r\nContent-Type: image/jpeg\r\nContent-Length: ");
+    out.extend_from_slice(len_str.as_bytes());
+    out.extend_from_slice(b"\r\n\r\n");
+    out.extend_from_slice(&jpeg);
+    out.extend_from_slice(b"\r\n");
+    out.freeze()
+}
+
+fn find_double_crlf(buf: &[u8]) -> Option<usize> {
+    if buf.len() < 4 { return None; }
+    (0..=buf.len() - 4).find(|&i| &buf[i..i + 4] == b"\r\n\r\n")
+}
+
+fn parse_content_length(headers: &[u8]) -> Option<usize> {
+    const NEEDLE: &[u8] = b"content-length:";
+    let n = NEEDLE.len();
+    let mut i = 0;
+    while i + n <= headers.len() {
+        if headers[i..i + n].eq_ignore_ascii_case(NEEDLE) {
+            let mut j = i + n;
+            while j < headers.len() && (headers[j] == b' ' || headers[j] == b'\t') { j += 1; }
+            let start = j;
+            while j < headers.len() && headers[j].is_ascii_digit() { j += 1; }
+            if j == start { return None; }
+            return std::str::from_utf8(&headers[start..j]).ok()?.parse().ok();
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Per-slot timing tracker. Logs a one-line summary every N frames so jitter
+/// (avg/max gap) and viewer count are visible without per-frame spam.
+struct IngestStats {
+    frames: u64,
+    bytes: u64,
+    window_start: Instant,
+    last_frame: Option<Instant>,
+    max_gap_ms: u64,
+}
+
+impl IngestStats {
+    fn new() -> Self {
+        Self {
+            frames: 0,
+            bytes: 0,
+            window_start: Instant::now(),
+            last_frame: None,
+            max_gap_ms: 0,
+        }
+    }
+
+    fn record(&mut self, slot: u8, viewers: usize, size: usize) {
+        let now = Instant::now();
+        if let Some(prev) = self.last_frame {
+            let gap = now.duration_since(prev).as_millis() as u64;
+            if gap > self.max_gap_ms { self.max_gap_ms = gap; }
+        }
+        self.last_frame = Some(now);
+        self.frames += 1;
+        self.bytes += size as u64;
+
+        if self.frames >= STATS_LOG_EVERY_N_FRAMES {
+            let elapsed = now.duration_since(self.window_start).as_millis().max(1) as u64;
+            let avg_gap = elapsed / self.frames;
+            let kbps = self.bytes * 8 / elapsed;
+            eprintln!(
+                "[ingest slot {}] frames={} elapsed={}ms avg_gap={}ms max_gap={}ms ~{}kbps viewers={}",
+                slot, self.frames, elapsed, avg_gap, self.max_gap_ms, kbps, viewers
+            );
+            self.frames = 0;
+            self.bytes = 0;
+            self.window_start = now;
+            self.max_gap_ms = 0;
+        }
+    }
+}
+
+async fn ingest_loop(slot: u8, listener: TcpListener, sender: FrameSender) {
     let mut buf = vec![0u8; INGEST_BUFFER_SIZE];
     loop {
         let (mut socket, addr) = match listener.accept().await {
@@ -128,7 +263,13 @@ async fn ingest_loop(slot: u8, listener: TcpListener, sender: broadcast::Sender<
                 continue;
             }
         };
+        // Local TCP, but disable Nagle so FFmpeg's small writes (the trailing
+        // boundary) reach us promptly without a 40ms ack-delay penalty.
+        let _ = socket.set_nodelay(true);
         eprintln!("[ingest slot {}] ffmpeg connesso da {}", slot, addr);
+
+        let mut parser = MjpegParser::new();
+        let mut stats = IngestStats::new();
 
         loop {
             match socket.read(&mut buf).await {
@@ -137,7 +278,25 @@ async fn ingest_loop(slot: u8, listener: TcpListener, sender: broadcast::Sender<
                     break;
                 }
                 Ok(n) => {
-                    let _ = sender.send(Bytes::copy_from_slice(&buf[..n]));
+                    let result = parser.feed(&buf[..n], |jpeg| {
+                        let size = jpeg.len();
+                        let viewers = sender.receiver_count();
+                        // Wrap each JPEG in its multipart envelope once, here,
+                        // so the HTTP handler is a straight pass-through and
+                        // every viewer shares the same Arc-backed Bytes.
+                        let payload = wrap_multipart(jpeg);
+                        // send_replace stores the latest frame even when no
+                        // viewers are subscribed, so the first viewer to
+                        // connect immediately sees the freshest frame instead
+                        // of waiting for the next FFmpeg packet. Plain send()
+                        // would return Err and drop the frame.
+                        sender.send_replace(Some(payload));
+                        stats.record(slot, viewers, size);
+                    });
+                    if let Err(e) = result {
+                        eprintln!("[ingest slot {}] parse error: {} - dropping connection", slot, e);
+                        break;
+                    }
                 }
                 Err(e) => {
                     eprintln!("[ingest slot {}] read error: {}", slot, e);
@@ -257,14 +416,14 @@ pub async fn start_stream(
         tokio::time::sleep(Duration::from_millis(150)).await;
     }
 
-    // For MJPEG, bind the local TCP listener and create a broadcast channel
-    // before spawning FFmpeg, so it can connect immediately.
-    let (sender, listener) = if matches!(stream_mode, StreamMode::Mjpeg) {
+    // For MJPEG, bind the local TCP listener and create a watch channel
+    // (latest-frame, no backlog) before spawning FFmpeg.
+    let (frame_tx, listener) = if matches!(stream_mode, StreamMode::Mjpeg) {
         let port = ingest_port_for_slot(slot);
         let listener = TcpListener::bind(("127.0.0.1", port)).await
             .map_err(|e| format!("Bind ingest port {}: {}", port, e))?;
-        let (s, _) = broadcast::channel::<Bytes>(BROADCAST_CAPACITY);
-        (Some(s), Some(listener))
+        let (tx, _) = watch::channel::<Option<Bytes>>(None);
+        (Some(Arc::new(tx)), Some(listener))
     } else {
         (None, None)
     };
@@ -283,9 +442,9 @@ pub async fn start_stream(
         .map_err(|e| format!("spawn fallito: {}", e))?;
 
     // Spawn the MJPEG ingest task (no-op for WebRTC modes).
-    let ingest_task = match (listener, sender.clone()) {
-        (Some(l), Some(s)) => Some(tauri::async_runtime::spawn(async move {
-            ingest_loop(slot, l, s).await;
+    let ingest_task = match (listener, frame_tx.clone()) {
+        (Some(l), Some(tx)) => Some(tauri::async_runtime::spawn(async move {
+            ingest_loop(slot, l, tx).await;
         })),
         _ => None,
     };
@@ -308,7 +467,7 @@ pub async fn start_stream(
         title: window_title,
         mode: stream_mode,
         child,
-        sender,
+        frame_tx,
         ingest_task,
         keepalive_task,
     });

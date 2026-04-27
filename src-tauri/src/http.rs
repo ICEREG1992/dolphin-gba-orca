@@ -8,7 +8,7 @@ use axum::{
 };
 use futures_util::StreamExt;
 use tokio::net::TcpListener;
-use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::wrappers::WatchStream;
 
 use crate::network::{HTTP_PORT, MEDIAMTX_WEBRTC_PORT};
 use crate::SharedState;
@@ -83,19 +83,21 @@ async fn stream_handler(
     let receiver = {
         let sessions = state.sessions.lock().unwrap();
         match sessions.get(&slot) {
-            Some(session) => match &session.sender {
-                Some(sender) => sender.subscribe(),
+            Some(session) => match &session.frame_tx {
+                Some(tx) => tx.subscribe(),
                 None => return (StatusCode::NOT_FOUND, "Stream is WebRTC-only").into_response(),
             },
             None => return (StatusCode::NOT_FOUND, "No active stream").into_response(),
         }
     };
 
-    let stream = BroadcastStream::new(receiver).filter_map(|res| async move {
-        match res {
-            Ok(bytes) => Some(Ok::<_, std::io::Error>(bytes)),
-            Err(_) => None,
-        }
+    eprintln!("[http slot {}] viewer connected", slot);
+
+    // Each item is a single complete multipart frame already wrapped by the
+    // ingest loop. WatchStream coalesces missed frames to the latest, so
+    // slow viewers drop whole frames cleanly instead of getting torn ones.
+    let stream = WatchStream::new(receiver).filter_map(|opt| async move {
+        opt.map(Ok::<_, std::io::Error>)
     });
 
     Response::builder()
