@@ -8,6 +8,7 @@ When you play GameCube games that use GBA-link features, Dolphin opens separate 
 
 ```
 [Dolphin] ──GBA windows──▶ [GBA Orca on Windows] ──HTTP──▶ [Phones / tablets]
+[Dolphin] ──GBA windows──▶ [GBA Orca on Windows] ──WebRTC──▶ [Phones / tablets]
 ```
 
 GBA Orca finds the GBA windows automatically, captures each one with FFmpeg, and serves them as MJPEG streams from a single HTTP server on port 8080. Players just open a URL in their browser.
