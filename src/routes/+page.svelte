@@ -22,6 +22,11 @@
       activeStreams: "stream attivi",
       interfaces: "interfacce di rete",
       language: "Lingua",
+      mode: "Modalità",
+      mjpeg: "MJPEG",
+      webrtc: "WebRTC",
+      webrtcPlus: "WebRTC++",
+      webrtcVp9: "WebRTC VP9",
     },
     en: {
       refresh: "Refresh",
@@ -41,14 +46,17 @@
       activeStreams: "active streams",
       interfaces: "network interfaces",
       language: "Language",
+      mode: "Mode",
+      mjpeg: "MJPEG",
+      webrtc: "WebRTC",
+      webrtcPlus: "WebRTC++",
+      webrtcVp9: "WebRTC VP9",
     },
   };
 
   function detectLang() {
-    // Prima controlla se l'utente ha già scelto una lingua
     const saved = localStorage.getItem("gba-orca-lang");
     if (saved && translations[saved]) return saved;
-    // Altrimenti usa la lingua del sistema operativo
     const sys = (navigator.language || navigator.userLanguage || "en").toLowerCase();
     return sys.startsWith("it") ? "it" : "en";
   }
@@ -60,14 +68,30 @@
   // ---- stato applicazione ----
   let windows = [];
   let streams = {};
-  let server = { interfaces: [], port: 8080 };
+  let server = { interfaces: [], port: 8080, webrtc_port: 8889 };
   let selectedIp = "";
   let gbaOnly = true;
   let loading = false;
   let error = "";
   let autoScanInterval = null;
+  let streamMode = "mjpeg";
 
   $: serverUrl = `http://${selectedIp || "..."}:${server.port}`;
+
+  /** @param {number} slot @param {string} mode */
+  function streamViewUrl(slot, mode) {
+    if (mode === "Webrtc" || mode === "WebrtcPlus" || mode === "WebrtcVp9") {
+      return `http://${selectedIp || "..."}:${server.webrtc_port}/slot${slot}`;
+    }
+    return `${serverUrl}/v/${slot}`;
+  }
+
+  function modeLabel(mode) {
+    if (mode === "WebrtcPlus") return "WebRTC++";
+    if (mode === "WebrtcVp9") return "WebRTC VP9";
+    if (mode === "Webrtc") return "WebRTC";
+    return "MJPEG";
+  }
 
   async function loadServerInfo() {
     try {
@@ -115,13 +139,14 @@
           slot: w.gba_slot,
           hwnd: w.hwnd,
           windowTitle: w.title,
+          mode: streamMode,
         });
         await refreshStreams();
       } catch (e) {
         error = String(e);
       }
     }
-    
+
   async function stopStream(slot) {
     error = "";
     try {
@@ -161,6 +186,16 @@
       {t.gbaOnly}
     </label>
     <span class="sep"></span>
+    <label class="chk">
+      {t.mode}:
+      <select bind:value={streamMode}>
+        <option value="mjpeg">{t.mjpeg}</option>
+        <option value="webrtc">{t.webrtc}</option>
+        <option value="webrtc++">{t.webrtcPlus}</option>
+        <option value="webrtc-vp9">{t.webrtcVp9}</option>
+      </select>
+    </label>
+    <span class="sep"></span>
     <span class="info">{t.autoScan}</span>
     <span class="grow"></span>
     <label class="chk">
@@ -198,7 +233,7 @@
           <th>{t.windowTitle}</th>
           <th style="width:80px">PID</th>
           <th style="width:90px">{t.size}</th>
-          <th style="width:280px">{t.status}</th>
+          <th style="width:320px">{t.status}</th>
         </tr>
       </thead>
       <tbody>
@@ -213,7 +248,11 @@
             <td>
               {#if w.gba_slot}
                 {#if streams[w.gba_slot]}
-                  {@const url = `${serverUrl}/v/${w.gba_slot}`}
+                  {@const s = streams[w.gba_slot]}
+                  {@const url = streamViewUrl(w.gba_slot, s.mode)}
+                  <span class="mode-badge" class:webrtc={s.mode === 'Webrtc' || s.mode === 'WebrtcPlus' || s.mode === 'WebrtcVp9'}>
+                    {modeLabel(s.mode)}
+                  </span>
                   <code class="url" on:click={() => copyToClipboard(url)} title={t.clickToCopy}>
                     {url}
                   </code>
@@ -400,6 +439,23 @@
     color: #888;
     padding: 16px;
     font-style: italic;
+  }
+
+  .mode-badge {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 3px;
+    background: #e0e0e0;
+    color: #555;
+    vertical-align: middle;
+    margin-right: 4px;
+  }
+
+  .mode-badge.webrtc {
+    background: #d0e8ff;
+    color: #0050a0;
   }
 
   button {

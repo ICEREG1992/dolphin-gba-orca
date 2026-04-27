@@ -1,0 +1,4 @@
+# MediaMTX config for GBA Orca
+paths:
+  all_others:
+    source: publisher

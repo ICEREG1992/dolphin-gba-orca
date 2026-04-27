@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(\"C:/Users/Vittorio/Desktop/Projects/gba-orca/gba-orca/src-tauri/binaries/mediamtx-x86_64-pc-windows-msvc.exe\" --help)",
+      "Bash(cargo check *)"
+    ]
+  }
+}
