@@ -1371,7 +1371,6 @@ dependencies = [
  "bytes",
  "futures-util",
  "libc",
- "libspa",
  "local-ip-address",
  "pipewire",
  "serde",

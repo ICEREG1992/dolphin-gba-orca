@@ -3,8 +3,9 @@
 //! scaling, encoding) is left to FFmpeg.
 
 use std::os::fd::OwnedFd;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use pipewire as pw;
 use pw::properties::properties;
@@ -226,7 +227,11 @@ pub fn start_raw_pump(
     node_id: u32,
     writer: Box<dyn FnMut(&[u8]) -> bool + Send>,
 ) -> Result<PipewirePumpHandle, String> {
-    let ptr_slot: Arc<Mutex<Option<MainLoopPtr>>> = Arc::new(Mutex::new(None));
+    // Pair lock+condvar so the pump thread can publish its mainloop pointer
+    // and we can wait for it without polling. The pump signals on success
+    // (Some) or on early failure (still None — we'll time out).
+    let ptr_slot: Arc<(Mutex<Option<MainLoopPtr>>, Condvar)> =
+        Arc::new((Mutex::new(None), Condvar::new()));
     let ptr_for_thread = ptr_slot.clone();
 
     let thread = std::thread::Builder::new()
@@ -235,20 +240,16 @@ pub fn start_raw_pump(
         .map_err(|e| format!("thread spawn: {}", e))?;
 
     let main_loop_ptr = {
-        let mut waited = 0;
-        loop {
-            {
-                let guard = ptr_slot.lock().unwrap();
-                if let Some(p) = guard.as_ref() {
-                    break p.0;
-                }
-            }
-            if waited > 200 {
-                eprintln!("[pw] timed out waiting for mainloop pointer");
-                break 0;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-            waited += 1;
+        let (lock, cvar) = &*ptr_slot;
+        let guard = lock.lock().unwrap();
+        let (guard, wait_res) = cvar
+            .wait_timeout_while(guard, Duration::from_secs(2), |g| g.is_none())
+            .unwrap();
+        if wait_res.timed_out() {
+            eprintln!("[pw] timed out waiting for mainloop pointer");
+            0
+        } else {
+            guard.as_ref().map(|p| p.0).unwrap_or(0)
         }
     };
 
@@ -262,7 +263,7 @@ fn run_pump(
     fd: OwnedFd,
     node_id: u32,
     writer: Box<dyn FnMut(&[u8]) -> bool + Send>,
-    ptr_slot: Arc<Mutex<Option<MainLoopPtr>>>,
+    ptr_slot: Arc<(Mutex<Option<MainLoopPtr>>, Condvar)>,
 ) {
     pw::init();
 
@@ -275,8 +276,10 @@ fn run_pump(
     };
     let main_loop_ptr = mainloop.as_raw_ptr() as usize;
     {
-        let mut g = ptr_slot.lock().unwrap();
+        let (lock, cvar) = &*ptr_slot;
+        let mut g = lock.lock().unwrap();
         *g = Some(MainLoopPtr(main_loop_ptr));
+        cvar.notify_all();
     }
 
     let context = match pw::context::ContextBox::new(mainloop.loop_(), None) {

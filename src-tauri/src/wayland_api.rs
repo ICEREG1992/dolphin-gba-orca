@@ -49,10 +49,13 @@ pub struct WaylandSource {
 #[derive(Default)]
 struct Inner {
     sources: Vec<WaylandSource>,
-    /// Opaque handle that keeps the portal session alive.
-    _portal: Option<PortalBox>,
-    /// PipeWire FD opened on the portal session.
-    _pipewire_fd: Option<OwnedFd>,
+    /// Opaque handle that keeps the portal session (proxy + Session) alive
+    /// for the lifetime of this selection. Boxed because the concrete types
+    /// are private/generic; we only need it to outlive the FD.
+    portal_handle: Option<PortalBox>,
+    /// PipeWire FD opened on the portal session. Duplicated on demand via
+    /// `dup_fd()` so each capture thread has its own connection.
+    pipewire_fd: Option<OwnedFd>,
     next_id: u64,
 }
 
@@ -77,16 +80,18 @@ impl WaylandData {
 
     /// Duplicate the PipeWire FD so the capture thread can open its own
     /// connection while the portal session (and its FD) stays alive here.
-    pub fn dup_fd(&self) -> Option<OwnedFd> {
+    /// Returns Err on dup failure (e.g. EMFILE) so the caller can surface
+    /// a real error instead of crashing the whole app.
+    pub fn dup_fd(&self) -> Result<Option<OwnedFd>, String> {
         let g = self.0.lock().unwrap();
-        g._pipewire_fd.as_ref().map(|fd| {
-            let raw = fd.as_raw_fd();
-            let new_raw = unsafe { libc::dup(raw) };
-            if new_raw < 0 {
-                panic!("dup(pipewire_fd) failed");
-            }
-            unsafe { OwnedFd::from_raw_fd(new_raw) }
-        })
+        let Some(fd) = g.pipewire_fd.as_ref() else { return Ok(None) };
+        let raw = fd.as_raw_fd();
+        let new_raw = unsafe { libc::dup(raw) };
+        if new_raw < 0 {
+            let err = std::io::Error::last_os_error();
+            return Err(format!("dup(pipewire_fd) failed: {}", err));
+        }
+        Ok(Some(unsafe { OwnedFd::from_raw_fd(new_raw) }))
     }
 }
 
@@ -159,8 +164,8 @@ pub async fn wayland_select_sources(
     }
     // Box the proxy + session together so they stay alive (and the portal
     // grant remains valid) for the lifetime of this selection.
-    g._portal = Some(Box::new((proxy, session)) as PortalBox);
-    g._pipewire_fd = Some(fd);
+    g.portal_handle = Some(Box::new((proxy, session)) as PortalBox);
+    g.pipewire_fd = Some(fd);
     eprintln!("[wayland] portal returned {} source(s)", out.len());
     Ok(out)
 }

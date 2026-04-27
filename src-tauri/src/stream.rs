@@ -11,7 +11,7 @@ use tokio::net::TcpListener;
 use tokio::sync::watch;
 
 use crate::mediamtx;
-use crate::network::{HTTP_PORT, MEDIAMTX_RTMP_PORT, MEDIAMTX_WEBRTC_PORT};
+use crate::network::MEDIAMTX_RTMP_PORT;
 use crate::platform::{is_window_alive, is_window_minimized, restore_window_silent};
 use crate::SharedState;
 
@@ -100,15 +100,6 @@ pub struct StreamInfo {
     pub slot: u8,
     pub title: String,
     pub mode: StreamMode,
-    pub url: String,
-}
-
-fn stream_url(slot: u8, mode: &StreamMode) -> String {
-    if mode.is_webrtc() {
-        format!("http://127.0.0.1:{}/slot{}", MEDIAMTX_WEBRTC_PORT, slot)
-    } else {
-        format!("http://127.0.0.1:{}/v/{}", HTTP_PORT, slot)
-    }
 }
 
 fn any_webrtc_active(state: &SharedState) -> bool {
@@ -213,8 +204,7 @@ pub fn wrap_multipart(jpeg: Bytes) -> Bytes {
 }
 
 fn find_double_crlf(buf: &[u8]) -> Option<usize> {
-    if buf.len() < 4 { return None; }
-    (0..=buf.len() - 4).find(|&i| &buf[i..i + 4] == b"\r\n\r\n")
+    buf.windows(4).position(|w| w == b"\r\n\r\n")
 }
 
 fn parse_content_length(headers: &[u8]) -> Option<usize> {
@@ -512,7 +502,6 @@ async fn launch_stream(
         slot,
         title: title.clone(),
         mode: stream_mode.clone(),
-        url: stream_url(slot, &stream_mode),
     };
 
     state.sessions.lock().unwrap().insert(slot, StreamSession {
@@ -598,8 +587,8 @@ fn resolve_ffmpeg_path() -> Result<std::path::PathBuf, String> {
 ///
 /// Unlike X11/Win32, the portal often returns the *full monitor resolution*
 /// (e.g. 8192x4608).  FFmpeg is therefore fed rawvideo on stdin and a
-/// `fps=30,scale=240:160:flags=fast_bilinear` pre-filter is injected so the
-/// encoder never has to process more than GBA-sized frames.
+/// `fps=30,scale=1280:-2:flags=fast_bilinear` pre-filter is injected so the
+/// encoder never has to process more than HD-sized frames.
 #[cfg(target_os = "linux")]
 #[tauri::command]
 pub async fn start_wayland_stream(
@@ -624,7 +613,7 @@ pub async fn start_wayland_stream(
         .ok_or_else(|| format!("Wayland source {} non trovato", source_id))?;
 
     let fd = wayland
-        .dup_fd()
+        .dup_fd()?
         .ok_or("Nessun PipeWire FD disponibile — eseguire wayland_select_sources prima")?;
 
     // Probe the negotiated format on a blocking thread so we know exactly
@@ -704,7 +693,7 @@ pub async fn start_wayland_stream(
         }
         StreamMode::WebrtcPlus => {
             args.extend([
-                "-vf".into(), format!("{},scale=1920:-2:flags=neighbor", prefilter),
+                "-vf".into(), format!("{},scale=2*iw:2*ih:flags=neighbor", prefilter),
                 "-c:v".into(), "libx264".into(),
                 "-preset".into(), "fast".into(),
                 "-tune".into(), "zerolatency".into(),
@@ -716,7 +705,7 @@ pub async fn start_wayland_stream(
         }
         StreamMode::WebrtcVp9 => {
             args.extend([
-                "-vf".into(), format!("{},scale=1920:-2:flags=neighbor", prefilter),
+                "-vf".into(), format!("{},scale=2*iw:2*ih:flags=neighbor", prefilter),
                 "-c:v".into(), "libvpx-vp9".into(),
                 "-crf".into(), "18".into(),
                 "-b:v".into(), "0".into(),
@@ -737,8 +726,22 @@ pub async fn start_wayland_stream(
         .spawn()
         .map_err(|e| format!("FFmpeg spawn: {}", e))?;
 
-    let stdin = child.stdin.take().ok_or("FFmpeg stdin not available")?;
-    let stderr = child.stderr.take().ok_or("FFmpeg stderr not available")?;
+    // From here on, any early-return must kill the child to avoid leaking an
+    // orphan FFmpeg process holding stdin/output ports.
+    let stdin = match child.stdin.take() {
+        Some(s) => s,
+        None => {
+            let _ = child.kill();
+            return Err("FFmpeg stdin not available".into());
+        }
+    };
+    let stderr = match child.stderr.take() {
+        Some(s) => s,
+        None => {
+            let _ = child.kill();
+            return Err("FFmpeg stderr not available".into());
+        }
+    };
 
     // Log FFmpeg stderr on a dedicated thread.
     let slot_for_log = slot;
@@ -748,6 +751,34 @@ pub async fn start_wayland_stream(
             eprintln!("[ffmpeg slot {}] {}", slot_for_log, line);
         }
     });
+
+    // Start the PipeWire pump synchronously *before* registering the session.
+    // This eliminates the previous race where on_shutdown could fire before
+    // the pump handle had been stored, leaving the pump running indefinitely.
+    let fd2 = match wayland.dup_fd() {
+        Ok(Some(fd)) => fd,
+        Ok(None) => {
+            let _ = child.kill();
+            return Err("FD non disponibile per pump".into());
+        }
+        Err(e) => {
+            let _ = child.kill();
+            return Err(e);
+        }
+    };
+    let mut stdin_writer = stdin;
+    let writer = Box::new(move |data: &[u8]| {
+        use std::io::Write;
+        stdin_writer.write_all(data).is_ok()
+    }) as Box<dyn FnMut(&[u8]) -> bool + Send>;
+    let pump = match crate::pipewire_capture::start_raw_pump(fd2, node_id, writer) {
+        Ok(h) => h,
+        Err(e) => {
+            let _ = child.kill();
+            return Err(format!("pw pump start: {}", e));
+        }
+    };
+    let pump_handle = Arc::new(std::sync::Mutex::new(Some(pump)));
 
     let child = Arc::new(std::sync::Mutex::new(Some(child)));
 
@@ -762,33 +793,7 @@ pub async fn start_wayland_stream(
         slot,
         title: label.clone(),
         mode: stream_mode.clone(),
-        url: stream_url(slot, &stream_mode),
     };
-
-    // PipeWire raw-frame pump writes directly into FFmpeg stdin (zero-copy,
-    // zero buffering through Rust channels).
-    let fd2 = wayland
-        .dup_fd()
-        .ok_or("FD non disponibile per pump")?;
-    let pump_slot = slot;
-    let pump_handle: Arc<std::sync::Mutex<Option<crate::pipewire_capture::PipewirePumpHandle>>> =
-        Arc::new(std::sync::Mutex::new(None));
-    let pump_handle_spawn = Arc::clone(&pump_handle);
-    let mut stdin_writer = stdin;
-    tokio::task::spawn_blocking(move || {
-        let writer = Box::new(move |data: &[u8]| {
-            use std::io::Write;
-            stdin_writer.write_all(data).is_ok()
-        }) as Box<dyn FnMut(&[u8]) -> bool + Send>;
-        match crate::pipewire_capture::start_raw_pump(fd2, node_id, writer) {
-            Ok(h) => {
-                *pump_handle_spawn.lock().unwrap() = Some(h);
-            }
-            Err(e) => {
-                eprintln!("[pw pump slot {}] start failed: {}", pump_slot, e);
-            }
-        }
-    });
 
     let on_shutdown = {
         let pump = Arc::clone(&pump_handle);
@@ -844,7 +849,6 @@ pub fn list_streams(state: State<'_, SharedState>) -> Vec<StreamInfo> {
             slot,
             title: s.title.clone(),
             mode: s.mode.clone(),
-            url: stream_url(slot, &s.mode),
         })
         .collect()
 }

@@ -43,5 +43,4 @@ windows = { version = "0.58", features = [
 x11rb = "0.13"
 ashpd = { version = "0.9", default-features = false, features = ["tokio"] }
 pipewire = "0.9"
-libspa = "0.9"
 libc = "0.2"

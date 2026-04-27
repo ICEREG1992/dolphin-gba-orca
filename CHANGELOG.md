@@ -174,6 +174,19 @@ This release rewrites the entire Wayland pipeline with a **"simplify everything"
 
 ---
 
+### Lessons Learned — Wayland: DO NOT use FFmpeg `libpipewire` input
+
+> **⚠️ MONITOR (Wayland only) — DO NOT attempt to use FFmpeg's `-f libpipewire -i <node_id>` to capture PipeWire streams granted by xdg-desktop-portal.**
+>
+> We tried it. It is terrible for real-time streaming:
+> - **Massive latency** — introduces seconds of internal buffering with no way to tune it.
+> - **Broken format negotiation** — ignores the portal's preferred resolution and pixel format, often feeding the encoder 8K frames even for a 240×160 window.
+> - **No lifecycle control** — FFmpeg manages the PipeWire connection internally; if it stalls or mis-negotiates, the entire pipeline dies with no recovery hook.
+>
+> **The only reliable approach on Wayland:** capture raw frames via the PipeWire C API (or a safe binding like `pipewire-rs`) and **feed them to FFmpeg on `stdin` as `rawvideo`**. Probe the negotiated format once, then pump raw bytes directly into FFmpeg. FFmpeg should only handle encoding and muxing, never capture. This gives full control over buffering, scaling, resolution clamping, and clean shutdown.
+
+---
+
 ### Known Limitations
 - **Minimized windows on Wayland** will stop producing capture frames. This is a compositor-level restriction (GNOME/KDE stop rendering occluded windows). There is no API on Wayland to force a window to stay rendered in the background.
 - **Window titles** are not available from the xdg-desktop-portal ScreenCast API. Slot assignment relies on selection order, not title matching.
