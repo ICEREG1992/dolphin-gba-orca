@@ -7,13 +7,13 @@ When you play GameCube games that use GBA-link features, Dolphin opens separate 
 ## How it works
 
 ```
-[Dolphin] ──GBA windows──▶ [GBA Orca on Windows] ──HTTP/WebRTC──▶ [Phones / tablets]
+[Dolphin] ──GBA windows──▶ [GBA Orca] ──HTTP/WebRTC──▶ [Phones / tablets]
 ```
 
 GBA Orca finds the GBA windows automatically, captures each one with FFmpeg, and serves them as either MJPEG over HTTP or WebRTC. Players just open a URL in their browser.
 ## Requirements
 
-- Windows 10 or 11
+- Windows 10/11 **or Linux** (X11 or Wayland)
 - Dolphin running a game with GBA windows
 - PC and phones on the same Wi-Fi/LAN
 
@@ -52,19 +52,18 @@ npm run tauri build    # production installer in src-tauri/target/release/bundle
 
 ## Stack
 
-Tauri 2 + Rust backend, Svelte frontend. FFmpeg (`gdigrab` + `mpdecimate`) for capture, MJPEG over HTTP for the stream, axum + tokio for the server. Window enumeration uses the `windows` crate; LAN interface discovery uses `local-ip-address`.
+Tauri 2 + Rust backend, Svelte frontend. FFmpeg (`gdigrab` on Windows, `x11grab` on X11, PipeWire on Wayland) for capture, MJPEG over HTTP for the stream, axum + tokio for the server. Window enumeration uses the `windows` crate on Windows and `x11rb` on X11. LAN interface discovery uses `local-ip-address`.
 
 The axum server proxies each FFmpeg process so multiple viewers can watch the same stream — FFmpeg's built-in HTTP server can't do that. If an FFmpeg process dies (window closed, fullscreen, etc.) the session is cleaned up automatically.
 
 ## Limitations
 
-- **Windows only.** Capture uses `gdigrab`. macOS/Linux would need `avfoundation` or `x11grab` plus a new window-enumeration module.
+- **Linux Wayland:** because of Wayland limitations: you must manually select the GBA windows in order. Auto-detect works fully on Windows and X11.
 - **Unencrypted.** Stream is plain HTTP on the LAN — meant for home use.
 
 ## Roadmap
 
 - Custom APP for Android and IOS with PIN-based routing (4-digit code instead of full URL)
-- Linux build (X11 and Wayland)
 
 ## Contributing
 
