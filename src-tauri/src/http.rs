@@ -93,9 +93,6 @@ async fn stream_handler(
 
     tracing::info!("[http slot {}] viewer connected", slot);
 
-    // Each item is a single complete multipart frame already wrapped by the
-    // ingest loop. WatchStream coalesces missed frames to the latest, so
-    // slow viewers drop whole frames cleanly instead of getting torn ones.
     let stream = WatchStream::new(receiver).filter_map(|opt| async move {
         opt.map(Ok::<_, std::io::Error>)
     });

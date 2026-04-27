@@ -28,9 +28,9 @@
       webrtcPlus: "WebRTC++",
       webrtcVp9: "WebRTC VP9",
       waylandTitle: "Modalità Wayland",
-      waylandHint: "Su Wayland l'enumerazione automatica delle finestre non è permessa. Seleziona le finestre GBA tramite il portal di sistema.",
       selectGbaWindows: "Seleziona finestre GBA",
       noWaylandSourcesYet: "Nessuna sorgente selezionata. Clicca sopra per aprire il portal.",
+      waylandHint: "Su Wayland l'enumerazione automatica delle finestre non è permessa. <span class='accent-text'>Clicca il pulsante</span> per scegliere le finestre GBA in ordine tramite il portal di sistema.",
       assignSlot: "Assegna",
       sourceLabel: "Sorgente",
       waylandAlert: "WAYLAND rilevato",
@@ -60,7 +60,7 @@
       webrtcPlus: "WebRTC++",
       webrtcVp9: "WebRTC VP9",
       waylandTitle: "Wayland mode",
-      waylandHint: "Wayland forbids automatic window enumeration. Pick the GBA windows through the system portal dialog.",
+      waylandHint: "Wayland forbids automatic window enumeration. <span class='accent-text'>Click the button</span> to pick the GBA windows in order through the system portal dialog.",
       selectGbaWindows: "Select GBA windows",
       noWaylandSourcesYet: "No source selected yet. Click the button above to open the portal.",
       assignSlot: "Assign",
@@ -333,7 +333,7 @@
   <div class="table-wrap">
     {#if isWayland}
       {#if waylandSources.length === 0}
-        <div class="wayland-hint">{t.waylandHint}</div>
+        <div class="wayland-hint">{@html t.waylandHint}</div>
       {/if}
       <table>
         <thead>
@@ -357,8 +357,8 @@
               <td class="title-cell" title={src.label}>{src.label}</td>
               <td>
                 <select
-                  value={src.gba_slot ?? ""}
-                  on:change={(e) => assignWaylandSlot(src, e.target.value)}
+                  value={src.gba_slot != null ? String(src.gba_slot) : ""}
+                  on:change={(e) => assignWaylandSlot(src, /** @type {HTMLSelectElement} */(e.currentTarget).value)}
                 >
                   <option value="">—</option>
                   <option value="1">GBA1</option>
@@ -706,8 +706,8 @@
     background: #0078d7;
     border: 1px solid #005a9e;
     color: #fff;
-    padding: 5px 16px;
-    font-size: 13px;
+    padding: 6px 18px;
+    font-size: 14px;
     font-weight: 600;
     box-shadow: 0 1px 3px rgba(0,120,215,0.35);
     transition: background 0.1s ease, box-shadow 0.1s ease;
@@ -737,5 +737,10 @@
   .slot-badge.empty {
     background: #e0e0e0;
     color: #888;
+  }
+
+  .accent-text {
+    color: #0078d7;
+    font-weight: 700;
   }
 </style>
