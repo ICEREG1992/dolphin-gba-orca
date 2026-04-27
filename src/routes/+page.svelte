@@ -30,7 +30,9 @@
       waylandTitle: "Modalità Wayland",
       selectGbaWindows: "Seleziona finestre GBA",
       noWaylandSourcesYet: "Nessuna sorgente selezionata. Clicca sopra per aprire il portal.",
-      waylandHint: "Su Wayland l'enumerazione automatica delle finestre non è permessa. <span class='accent-text'>Clicca il pulsante</span> per scegliere le finestre GBA in ordine tramite il portal di sistema.",
+      waylandHintBefore: "Su Wayland l'enumerazione automatica delle finestre non è permessa. ",
+      waylandHintAction: "Clicca il pulsante",
+      waylandHintAfter: " per scegliere le finestre GBA in ordine tramite il portal di sistema.",
       assignSlot: "Assegna",
       sourceLabel: "Sorgente",
       waylandAlert: "WAYLAND rilevato",
@@ -60,7 +62,9 @@
       webrtcPlus: "WebRTC++",
       webrtcVp9: "WebRTC VP9",
       waylandTitle: "Wayland mode",
-      waylandHint: "Wayland forbids automatic window enumeration. <span class='accent-text'>Click the button</span> to pick the GBA windows in order through the system portal dialog.",
+      waylandHintBefore: "Wayland forbids automatic window enumeration. ",
+      waylandHintAction: "Click the button",
+      waylandHintAfter: " to pick the GBA windows in order through the system portal dialog.",
       selectGbaWindows: "Select GBA windows",
       noWaylandSourcesYet: "No source selected yet. Click the button above to open the portal.",
       assignSlot: "Assign",
@@ -333,7 +337,7 @@
   <div class="table-wrap">
     {#if isWayland}
       {#if waylandSources.length === 0}
-        <div class="wayland-hint">{@html t.waylandHint}</div>
+        <div class="wayland-hint">{t.waylandHintBefore}<span class="accent-text">{t.waylandHintAction}</span>{t.waylandHintAfter}</div>
       {/if}
       <table>
         <thead>
