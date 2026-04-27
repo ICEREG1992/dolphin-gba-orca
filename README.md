@@ -30,8 +30,8 @@ GBA Orca finds the GBA windows automatically, captures each one with FFmpeg, and
 7. You can select the streaming mode:
 - **MJPEG** — Best quality, but high latency  
 - **WebRTC** — Poor quality  
-- **WebRTC++** — Surprisingly good balance  
-- **WebRTC (VP9)** — Good quality, but CPU intensive and not widely supported
+- **WebRTC++** — Surprisingly good
+- **WebRTC (VP9)** — Best quality, but CPU intensive and not widely supported
 
 The app rescans every 3 seconds, so closing or restarting Dolphin mid-session is fine — the list updates on its own.
 
