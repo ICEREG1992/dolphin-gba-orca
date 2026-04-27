@@ -28,6 +28,13 @@ mod platform {
 use mediamtx::MediamtxState;
 use stream::StreamSession;
 
+/// Detect a GBA slot from a Dolphin window title (matches "GBA1".."GBA4").
+/// Shared between Win32 and X11 enumeration paths.
+pub(crate) fn detect_gba_slot(title: &str) -> Option<u8> {
+    const SLOTS: [(&str, u8); 4] = [("GBA1", 1), ("GBA2", 2), ("GBA3", 3), ("GBA4", 4)];
+    SLOTS.iter().find(|(s, _)| title.contains(s)).map(|(_, n)| *n)
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct SharedState {
     pub sessions: Arc<Mutex<HashMap<u8, StreamSession>>>,

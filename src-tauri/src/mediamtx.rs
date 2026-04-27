@@ -70,7 +70,7 @@ pub async fn ensure(app: &tauri::AppHandle, state: &SharedState) -> AppResult<()
                     tracing::info!("[mediamtx] {}", String::from_utf8_lossy(&line));
                 }
                 CommandEvent::Terminated(payload) => {
-                    tracing::info!("[mediamtx] terminato: code={:?}", payload.code);
+                    tracing::warn!("[mediamtx] terminato: code={:?}", payload.code);
                     // Clear the child so future ensure() calls will respawn,
                     // and tear down all dependent WebRTC streams. We hold
                     // mediamtx then sessions — the only place both locks are

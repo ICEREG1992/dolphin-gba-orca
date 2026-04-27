@@ -30,11 +30,6 @@ pub struct WindowInfo {
     pub gba_slot: Option<u8>,
 }
 
-fn detect_gba_slot(title: &str) -> Option<u8> {
-    const SLOTS: [(&str, u8); 4] = [("GBA1", 1), ("GBA2", 2), ("GBA3", 3), ("GBA4", 4)];
-    SLOTS.iter().find(|(s, _)| title.contains(s)).map(|(_, n)| *n)
-}
-
 /// Open a fresh X11 connection. Returns None when no DISPLAY is set or the
 /// X server can't be reached — on a pure Wayland session callers then see
 /// an empty window list and the helpers no-op.
@@ -107,7 +102,7 @@ pub fn list_windows() -> Vec<WindowInfo> {
             let (x, y, width, height) = get_geometry(&conn, xid, root).unwrap_or((0, 0, 0, 0));
             WindowInfo {
                 hwnd: xid as isize,
-                gba_slot: detect_gba_slot(&title),
+                gba_slot: crate::detect_gba_slot(&title),
                 pid: get_pid(&conn, xid, &atoms),
                 title,
                 x,

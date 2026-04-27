@@ -8,8 +8,17 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use pipewire as pw;
-use pw::properties::properties;
+use pw::properties::{properties, PropertiesBox};
 use pw::spa;
+
+/// Stream properties common to both `probe_format` and `start_raw_pump`.
+fn make_capture_props() -> PropertiesBox {
+    properties! {
+        *pw::keys::MEDIA_TYPE => "Video",
+        *pw::keys::MEDIA_CATEGORY => "Capture",
+        *pw::keys::MEDIA_ROLE => "Screen",
+    }
+}
 
 /// `pw::init()` is idempotent per docs but we still gate it behind a `Once`
 /// so the cost (and any future side-effects) only happen once per process.
@@ -130,16 +139,8 @@ pub fn probe_format(fd: OwnedFd, node_id: u32) -> Result<VideoFormatInfo, String
     let res_clone = result.clone();
     let ml_ptr = MainLoopPtr(mainloop.as_raw_ptr() as usize);
 
-    let stream = pw::stream::StreamBox::new(
-        &core,
-        "gba-orca-probe",
-        properties! {
-            *pw::keys::MEDIA_TYPE => "Video",
-            *pw::keys::MEDIA_CATEGORY => "Capture",
-            *pw::keys::MEDIA_ROLE => "Screen",
-        },
-    )
-    .map_err(|e| format!("stream: {}", e))?;
+    let stream = pw::stream::StreamBox::new(&core, "gba-orca-probe", make_capture_props())
+        .map_err(|e| format!("stream: {}", e))?;
 
     // Listener must outlive `mainloop.run()` to keep callbacks active. The
     // leading `_` only suppresses the unused-warning; the binding is load-bearing.
@@ -289,49 +290,30 @@ fn run_pump(
 
     pw_init_once();
 
-    let mainloop = match pw::main_loop::MainLoopBox::new(None) {
-        Ok(ml) => ml,
-        Err(e) => {
-            tracing::error!("[pw] mainloop failed: {}", e);
-            signal_failure(&ptr_slot);
-            return;
-        }
-    };
+    // Each pipewire setup step has a lifetime tied to the previous one
+    // (ContextBox<'a>, CoreBox<'a>, ...), so we can't bundle them into a
+    // single fallible closure. Instead, collapse the per-step match to a
+    // single macro call: log + signal + early-return on Err.
+    macro_rules! try_pw {
+        ($expr:expr, $tag:literal) => {
+            match $expr {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::error!(concat!("[pw] ", $tag, " failed: {}"), e);
+                    signal_failure(&ptr_slot);
+                    return;
+                }
+            }
+        };
+    }
 
-    let context = match pw::context::ContextBox::new(mainloop.loop_(), None) {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!("[pw] context failed: {}", e);
-            signal_failure(&ptr_slot);
-            return;
-        }
-    };
-
-    let core = match context.connect_fd(fd, None) {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!("[pw] connect_fd failed: {}", e);
-            signal_failure(&ptr_slot);
-            return;
-        }
-    };
-
-    let stream = match pw::stream::StreamBox::new(
-        &core,
-        "gba-orca-pump",
-        properties! {
-            *pw::keys::MEDIA_TYPE => "Video",
-            *pw::keys::MEDIA_CATEGORY => "Capture",
-            *pw::keys::MEDIA_ROLE => "Screen",
-        },
-    ) {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::error!("[pw] stream failed: {}", e);
-            signal_failure(&ptr_slot);
-            return;
-        }
-    };
+    let mainloop = try_pw!(pw::main_loop::MainLoopBox::new(None), "mainloop");
+    let context = try_pw!(pw::context::ContextBox::new(mainloop.loop_(), None), "context");
+    let core = try_pw!(context.connect_fd(fd, None), "connect_fd");
+    let stream = try_pw!(
+        pw::stream::StreamBox::new(&core, "gba-orca-pump", make_capture_props()),
+        "stream"
+    );
 
     let main_loop_ptr = mainloop.as_raw_ptr() as usize;
     let alive = Arc::new(AtomicBool::new(true));

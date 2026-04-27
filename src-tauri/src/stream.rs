@@ -33,13 +33,13 @@ pub enum StreamMode {
 }
 
 impl StreamMode {
-    pub fn parse(s: &str) -> Result<Self, String> {
+    pub fn parse(s: &str) -> AppResult<Self> {
         match s {
             "mjpeg" => Ok(Self::Mjpeg),
             "webrtc" => Ok(Self::Webrtc),
             "webrtc++" => Ok(Self::WebrtcPlus),
             "webrtc-vp9" => Ok(Self::WebrtcVp9),
-            other => Err(format!("Modalità non valida: {}", other)),
+            other => Err(AppError::Msg(format!("Modalità non valida: {}", other))),
         }
     }
 
@@ -279,7 +279,7 @@ async fn ingest_loop(slot: u8, listener: TcpListener, sender: FrameSender) {
         let (mut socket, addr) = match listener.accept().await {
             Ok(v) => v,
             Err(e) => {
-                tracing::info!("[ingest slot {}] accept error: {}", slot, e);
+                tracing::warn!("[ingest slot {}] accept error: {}", slot, e);
                 tokio::time::sleep(Duration::from_millis(200)).await;
                 continue;
             }
@@ -315,12 +315,12 @@ async fn ingest_loop(slot: u8, listener: TcpListener, sender: FrameSender) {
                         stats.record(slot, viewers, size);
                     });
                     if let Err(e) = result {
-                        tracing::info!("[ingest slot {}] parse error: {} - dropping connection", slot, e);
+                        tracing::warn!("[ingest slot {}] parse error: {} - dropping connection", slot, e);
                         break;
                     }
                 }
                 Err(e) => {
-                    tracing::info!("[ingest slot {}] read error: {}", slot, e);
+                    tracing::warn!("[ingest slot {}] read error: {}", slot, e);
                     break;
                 }
             }
@@ -341,7 +341,7 @@ async fn keepalive_loop(slot: u8, hwnd: isize, state: SharedState) {
         }
 
         if is_window_minimized(hwnd) {
-            tracing::info!("[keepalive slot {}] finestra minimizzata, ripristino", slot);
+            tracing::debug!("[keepalive slot {}] finestra minimizzata, ripristino", slot);
             restore_window_silent(hwnd);
         }
     }
@@ -568,7 +568,7 @@ async fn launch_stream(
                     tracing::info!("[ffmpeg slot {}] {}", slot, String::from_utf8_lossy(&line));
                 }
                 CommandEvent::Terminated(payload) => {
-                    tracing::info!("[ffmpeg slot {}] terminato: code={:?}", slot, payload.code);
+                    tracing::warn!("[ffmpeg slot {}] terminato: code={:?}", slot, payload.code);
                     remove_and_cleanup(&state_for_ff, slot);
                 }
                 _ => {}
@@ -841,7 +841,7 @@ pub async fn start_wayland_stream(
                 let _ = c.wait();
             }
         }).await;
-        tracing::info!("[ffmpeg slot {}] exited", watch_slot);
+        tracing::warn!("[ffmpeg slot {}] exited", watch_slot);
         remove_and_cleanup(&state_for_ff, watch_slot);
     });
 

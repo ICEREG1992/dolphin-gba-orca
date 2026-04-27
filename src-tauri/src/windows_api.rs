@@ -21,11 +21,6 @@ pub struct WindowInfo {
 
 fn to_hwnd(v: isize) -> HWND { HWND(v as *mut _) }
 
-fn detect_gba_slot(title: &str) -> Option<u8> {
-    const SLOTS: [(&str, u8); 4] = [("GBA1", 1), ("GBA2", 2), ("GBA3", 3), ("GBA4", 4)];
-    SLOTS.iter().find(|(s, _)| title.contains(s)).map(|(_, n)| *n)
-}
-
 unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
     let out = &mut *(lparam.0 as *mut Vec<WindowInfo>);
     if !IsWindowVisible(hwnd).as_bool() { return TRUE; }
@@ -41,7 +36,7 @@ unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
     let _ = GetWindowRect(hwnd, &mut rect);
     out.push(WindowInfo {
         hwnd: hwnd.0 as isize,
-        gba_slot: detect_gba_slot(&title),
+        gba_slot: crate::detect_gba_slot(&title),
         title,
         pid,
         x: rect.left,
