@@ -91,7 +91,7 @@ async fn stream_handler(
         }
     };
 
-    eprintln!("[http slot {}] viewer connected", slot);
+    tracing::info!("[http slot {}] viewer connected", slot);
 
     // Each item is a single complete multipart frame already wrapped by the
     // ingest loop. WatchStream coalesces missed frames to the latest, so
@@ -134,11 +134,11 @@ pub async fn run_http_server(state: SharedState) {
     let bind = format!("0.0.0.0:{}", HTTP_PORT);
     match TcpListener::bind(&bind).await {
         Ok(listener) => {
-            eprintln!("[http] listening on {}", bind);
+            tracing::info!("[http] listening on {}", bind);
             if let Err(e) = axum::serve(listener, router).await {
-                eprintln!("[http] error: {}", e);
+                tracing::error!("[http] error: {}", e);
             }
         }
-        Err(e) => eprintln!("[http] bind failed on {}: {}", bind, e),
+        Err(e) => tracing::error!("[http] bind failed on {}: {}", bind, e),
     }
 }

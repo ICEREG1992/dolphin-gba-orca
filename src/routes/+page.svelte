@@ -33,7 +33,8 @@
       noWaylandSourcesYet: "Nessuna sorgente selezionata. Clicca sopra per aprire il portal.",
       assignSlot: "Assegna",
       sourceLabel: "Sorgente",
-      waylandBanner: "WAYLAND — Seleziona nell'ordine: GBA1, GBA2, GBA3, GBA4",
+      waylandAlert: "WAYLAND rilevato",
+      waylandSelectOrder: "Seleziona nell'ordine:",
     },
     en: {
       refresh: "Refresh",
@@ -64,7 +65,8 @@
       noWaylandSourcesYet: "No source selected yet. Click the button above to open the portal.",
       assignSlot: "Assign",
       sourceLabel: "Source",
-      waylandBanner: "WAYLAND — Select in order: GBA1, GBA2, GBA3, GBA4",
+      waylandAlert: "WAYLAND detected",
+      waylandSelectOrder: "Select in order:",
     },
   };
 
@@ -232,7 +234,7 @@
   }
 
   onMount(async () => {
-    loadServerInfo();
+    await loadServerInfo();
     try {
       isWayland = await invoke("is_wayland");
     } catch (e) {
@@ -261,12 +263,8 @@
 
   {#if isWayland}
     <div class="wayland-banner">
-      <span class="wayland-alert">WAYLAND rilevato</span>
-      {#if lang === 'it'}
-        <span class="wayland-text"> — Seleziona nell'ordine: </span>
-      {:else}
-        <span class="wayland-text"> — Select in order: </span>
-      {/if}
+      <span class="wayland-alert">{t.waylandAlert}</span>
+      <span class="wayland-text"> — {t.waylandSelectOrder} </span>
       <span class="wayland-slot">GBA1</span><span class="wayland-text">, </span>
       <span class="wayland-slot">GBA2</span><span class="wayland-text">, </span>
       <span class="wayland-slot">GBA3</span><span class="wayland-text">, </span>

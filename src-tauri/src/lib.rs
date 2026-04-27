@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use tauri::Manager;
 
+mod error;
 mod http;
 mod mediamtx;
 mod network;
@@ -31,6 +32,11 @@ use stream::StreamSession;
 pub(crate) struct SharedState {
     pub sessions: Arc<Mutex<HashMap<u8, StreamSession>>>,
     pub mediamtx: Arc<Mutex<MediamtxState>>,
+    /// Async mutex held across the full `mediamtx::ensure()` flow so two
+    /// concurrent WebRTC stream-starts can't both spawn MediaMTX (and race
+    /// for port 1935). std::sync::Mutex would deadlock across the spawn's
+    /// .await; tokio::sync::Mutex is safe to hold over awaits.
+    pub mediamtx_starter: Arc<tokio::sync::Mutex<()>>,
 }
 
 /// Create a Windows Job Object with KILL_ON_JOB_CLOSE and assign the current
@@ -51,7 +57,7 @@ fn setup_job_object() {
         let job = match CreateJobObjectW(None, PCWSTR::null()) {
             Ok(h) => h,
             Err(e) => {
-                eprintln!("[job] CreateJobObjectW failed: {}", e);
+                tracing::error!("[job] CreateJobObjectW failed: {}", e);
                 return;
             }
         };
@@ -65,12 +71,12 @@ fn setup_job_object() {
             &info as *const _ as *const _,
             std::mem::size_of::<JOBOBJECT_BASIC_LIMIT_INFORMATION>() as u32,
         ) {
-            eprintln!("[job] SetInformationJobObject failed: {}", e);
+            tracing::error!("[job] SetInformationJobObject failed: {}", e);
             return;
         }
 
         if let Err(e) = AssignProcessToJobObject(job, GetCurrentProcess()) {
-            eprintln!("[job] AssignProcessToJobObject failed: {}", e);
+            tracing::error!("[job] AssignProcessToJobObject failed: {}", e);
             return;
         }
 
@@ -79,7 +85,7 @@ fn setup_job_object() {
         #[allow(dead_code)]
         struct JobHandle(HANDLE);
         std::mem::forget(JobHandle(job));
-        eprintln!("[job] KILL_ON_JOB_CLOSE job object created");
+        tracing::info!("[job] KILL_ON_JOB_CLOSE job object created");
     }
 }
 
@@ -108,8 +114,21 @@ fn is_wayland() -> bool {
     }
 }
 
+/// Initialize the global tracing subscriber. Defaults to `info` for our
+/// crate; users can override with `RUST_LOG=debug` or finer-grained filters.
+fn init_tracing() {
+    use tracing_subscriber::EnvFilter;
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info"));
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_target(false)
+        .init();
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    init_tracing();
     #[cfg(windows)]
     setup_job_object();
     #[cfg(target_os = "linux")]

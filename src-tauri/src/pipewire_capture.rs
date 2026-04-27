@@ -3,13 +3,20 @@
 //! scaling, encoding) is left to FFmpeg.
 
 use std::os::fd::OwnedFd;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, Once};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use pipewire as pw;
 use pw::properties::properties;
 use pw::spa;
+
+/// `pw::init()` is idempotent per docs but we still gate it behind a `Once`
+/// so the cost (and any future side-effects) only happen once per process.
+fn pw_init_once() {
+    static INIT: Once = Once::new();
+    INIT.call_once(|| pw::init());
+}
 
 #[derive(Debug, Clone)]
 pub struct VideoFormatInfo {
@@ -78,7 +85,7 @@ fn build_format_params() -> Vec<u8> {
         std::io::Cursor::new(Vec::new()),
         &spa::pod::Value::Object(obj),
     )
-    .unwrap()
+    .expect("SPA pod serialize")
     .0
     .into_inner()
 }
@@ -110,7 +117,7 @@ fn parse_video_format(param: &spa::pod::Pod) -> Result<VideoFormatInfo, String> 
 /// Open a short-lived PipeWire stream, read the negotiated format, then stop.
 /// Consumes the fd.
 pub fn probe_format(fd: OwnedFd, node_id: u32) -> Result<VideoFormatInfo, String> {
-    pw::init();
+    pw_init_once();
 
     let mainloop = pw::main_loop::MainLoopBox::new(None)
         .map_err(|e| format!("mainloop: {}", e))?;
@@ -134,10 +141,12 @@ pub fn probe_format(fd: OwnedFd, node_id: u32) -> Result<VideoFormatInfo, String
     )
     .map_err(|e| format!("stream: {}", e))?;
 
-    let _listener = stream
+    // Listener must outlive `mainloop.run()` to keep callbacks active. The
+    // leading `_` only suppresses the unused-warning; the binding is load-bearing.
+    let _keep_listener = stream
         .add_local_listener_with_user_data(())
         .state_changed(|_, _, _old, _new| {
-            eprintln!("[pw-probe] state changed");
+            tracing::debug!("[pw-probe] state changed");
         })
         .param_changed(move |_, _, id, param| {
             if id != spa::param::ParamType::Format.as_raw() {
@@ -146,7 +155,7 @@ pub fn probe_format(fd: OwnedFd, node_id: u32) -> Result<VideoFormatInfo, String
             let Some(param) = param else { return };
             let mut g = res_clone.lock().unwrap();
             if g.is_none() {
-                eprintln!("[pw-probe] format param received");
+                tracing::info!("[pw-probe] format param received");
                 *g = Some(parse_video_format(param));
                 unsafe { pw::sys::pw_main_loop_quit(ml_ptr.0 as *mut pw::sys::pw_main_loop) };
             }
@@ -175,7 +184,7 @@ pub fn probe_format(fd: OwnedFd, node_id: u32) -> Result<VideoFormatInfo, String
         std::thread::sleep(std::time::Duration::from_secs(10));
         let mut g = res_timeout.lock().unwrap();
         if g.is_none() {
-            eprintln!("[pw-probe] timeout waiting for format");
+            tracing::warn!("[pw-probe] timeout waiting for format");
             *g = Some(Err("probe timeout".into()));
             unsafe { pw::sys::pw_main_loop_quit(ml_ptr2.0 as *mut pw::sys::pw_main_loop) };
         }
@@ -246,7 +255,7 @@ pub fn start_raw_pump(
             .wait_timeout_while(guard, Duration::from_secs(2), |g| g.is_none())
             .unwrap();
         if wait_res.timed_out() {
-            eprintln!("[pw] timed out waiting for mainloop pointer");
+            tracing::warn!("[pw] timed out waiting for mainloop pointer");
             0
         } else {
             guard.as_ref().map(|p| p.0).unwrap_or(0)
@@ -265,27 +274,35 @@ fn run_pump(
     writer: Box<dyn FnMut(&[u8]) -> bool + Send>,
     ptr_slot: Arc<(Mutex<Option<MainLoopPtr>>, Condvar)>,
 ) {
-    pw::init();
+    // Helper: wake the caller fast on early failure. Publishes a sentinel
+    // pointer of 0 so the caller observes failure instead of waiting the
+    // full 2s timeout. PipewirePumpHandle::stop already treats ptr==0 as
+    // "nothing to quit".
+    let signal_failure = |ptr_slot: &Arc<(Mutex<Option<MainLoopPtr>>, Condvar)>| {
+        let (lock, cvar) = &**ptr_slot;
+        let mut g = lock.lock().unwrap();
+        if g.is_none() {
+            *g = Some(MainLoopPtr(0));
+        }
+        cvar.notify_all();
+    };
+
+    pw_init_once();
 
     let mainloop = match pw::main_loop::MainLoopBox::new(None) {
         Ok(ml) => ml,
         Err(e) => {
-            eprintln!("[pw] mainloop failed: {}", e);
+            tracing::error!("[pw] mainloop failed: {}", e);
+            signal_failure(&ptr_slot);
             return;
         }
     };
-    let main_loop_ptr = mainloop.as_raw_ptr() as usize;
-    {
-        let (lock, cvar) = &*ptr_slot;
-        let mut g = lock.lock().unwrap();
-        *g = Some(MainLoopPtr(main_loop_ptr));
-        cvar.notify_all();
-    }
 
     let context = match pw::context::ContextBox::new(mainloop.loop_(), None) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("[pw] context failed: {}", e);
+            tracing::error!("[pw] context failed: {}", e);
+            signal_failure(&ptr_slot);
             return;
         }
     };
@@ -293,7 +310,8 @@ fn run_pump(
     let core = match context.connect_fd(fd, None) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("[pw] connect_fd failed: {}", e);
+            tracing::error!("[pw] connect_fd failed: {}", e);
+            signal_failure(&ptr_slot);
             return;
         }
     };
@@ -309,11 +327,13 @@ fn run_pump(
     ) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("[pw] stream failed: {}", e);
+            tracing::error!("[pw] stream failed: {}", e);
+            signal_failure(&ptr_slot);
             return;
         }
     };
 
+    let main_loop_ptr = mainloop.as_raw_ptr() as usize;
     let alive = Arc::new(AtomicBool::new(true));
     let user_data = PumpUserData {
         alive: alive.clone(),
@@ -321,7 +341,9 @@ fn run_pump(
         writer,
     };
 
-    let _listener = stream
+    // Listener must outlive `mainloop.run()` to keep the process callback
+    // alive. The leading `_` only suppresses the unused warning.
+    let _keep_listener = stream
         .add_local_listener_with_user_data(user_data)
         .process(|stream, ud| {
             if !ud.alive.load(Ordering::Relaxed) {
@@ -359,11 +381,22 @@ fn run_pump(
         pw::stream::StreamFlags::AUTOCONNECT | pw::stream::StreamFlags::MAP_BUFFERS,
         &mut params,
     ) {
-        eprintln!("[pw] connect failed: {}", e);
+        tracing::error!("[pw] connect failed: {}", e);
+        signal_failure(&ptr_slot);
         return;
     }
 
-    eprintln!("[pw] pump started for node {}", node_id);
+    // Publish the mainloop pointer only after every PipeWire object is
+    // successfully set up. This guarantees the caller's pointer is valid
+    // for the full lifetime of `mainloop.run()`.
+    {
+        let (lock, cvar) = &*ptr_slot;
+        let mut g = lock.lock().unwrap();
+        *g = Some(MainLoopPtr(main_loop_ptr));
+        cvar.notify_all();
+    }
+
+    tracing::info!("[pw] pump started for node {}", node_id);
     mainloop.run();
-    eprintln!("[pw] pump exited for node {}", node_id);
+    tracing::info!("[pw] pump exited for node {}", node_id);
 }

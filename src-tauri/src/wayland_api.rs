@@ -22,6 +22,8 @@ use ashpd::enumflags2::BitFlags;
 use serde::Serialize;
 use tauri::State;
 
+use crate::error::{AppError, AppResult};
+
 // We keep the proxy + session alive for the lifetime of the selection so the
 // portal grant doesn't disappear.  They are boxed to avoid naming the exact
 // private/generic types in our state struct.
@@ -106,14 +108,14 @@ pub fn wayland_list_sources(state: State<'_, WaylandData>) -> Vec<WaylandSource>
 #[tauri::command]
 pub async fn wayland_select_sources(
     state: State<'_, WaylandData>,
-) -> Result<Vec<WaylandSource>, String> {
+) -> AppResult<Vec<WaylandSource>> {
     let proxy = Screencast::new()
         .await
-        .map_err(|e| format!("portal connect: {}", e))?;
+        .map_err(|e| AppError::Portal(format!("connect: {}", e)))?;
     let session = proxy
         .create_session()
         .await
-        .map_err(|e| format!("create session: {}", e))?;
+        .map_err(|e| AppError::Portal(format!("create session: {}", e)))?;
 
     proxy
         .select_sources(
@@ -125,19 +127,19 @@ pub async fn wayland_select_sources(
             PersistMode::DoNot,
         )
         .await
-        .map_err(|e| format!("select sources: {}", e))?;
+        .map_err(|e| AppError::Portal(format!("select sources: {}", e)))?;
 
     let response = proxy
         .start(&session, &WindowIdentifier::None)
         .await
-        .map_err(|e| format!("portal start: {}", e))?
+        .map_err(|e| AppError::Portal(format!("start: {}", e)))?
         .response()
-        .map_err(|e| format!("portal response: {}", e))?;
+        .map_err(|e| AppError::Portal(format!("response: {}", e)))?;
 
     let fd = proxy
         .open_pipe_wire_remote(&session)
         .await
-        .map_err(|e| format!("open pipewire fd: {}", e))?;
+        .map_err(|e| AppError::Portal(format!("open pipewire fd: {}", e)))?;
 
     let mut g = state.0.lock().unwrap();
     g.sources.clear();
@@ -166,7 +168,7 @@ pub async fn wayland_select_sources(
     // grant remains valid) for the lifetime of this selection.
     g.portal_handle = Some(Box::new((proxy, session)) as PortalBox);
     g.pipewire_fd = Some(fd);
-    eprintln!("[wayland] portal returned {} source(s)", out.len());
+    tracing::info!("[wayland] portal returned {} source(s)", out.len());
     Ok(out)
 }
 
@@ -178,10 +180,10 @@ pub fn wayland_assign_slot(
     state: State<'_, WaylandData>,
     source_id: u64,
     slot: Option<u8>,
-) -> Result<Vec<WaylandSource>, String> {
+) -> AppResult<Vec<WaylandSource>> {
     if let Some(s) = slot {
         if !(1..=4).contains(&s) {
-            return Err(format!("Slot non valido: {}", s));
+            return Err(AppError::InvalidSlot(s));
         }
     }
     let mut g = state.0.lock().unwrap();
@@ -196,7 +198,7 @@ pub fn wayland_assign_slot(
         .sources
         .iter_mut()
         .find(|x| x.id == source_id)
-        .ok_or_else(|| format!("Source {} non trovato", source_id))?;
+        .ok_or_else(|| AppError::Msg(format!("Source {} non trovato", source_id)))?;
     src.gba_slot = slot;
     Ok(g.sources.clone())
 }

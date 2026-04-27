@@ -10,6 +10,7 @@ use tokio::io::AsyncReadExt;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 
+use crate::error::{AppError, AppResult};
 use crate::mediamtx;
 use crate::network::MEDIAMTX_RTMP_PORT;
 use crate::platform::{is_window_alive, is_window_minimized, restore_window_silent};
@@ -260,7 +261,7 @@ impl IngestStats {
             let elapsed = now.duration_since(self.window_start).as_millis().max(1) as u64;
             let avg_gap = elapsed / self.frames;
             let kbps = self.bytes * 8 / elapsed;
-            eprintln!(
+            tracing::debug!(
                 "[ingest slot {}] frames={} elapsed={}ms avg_gap={}ms max_gap={}ms ~{}kbps viewers={}",
                 slot, self.frames, elapsed, avg_gap, self.max_gap_ms, kbps, viewers
             );
@@ -278,7 +279,7 @@ async fn ingest_loop(slot: u8, listener: TcpListener, sender: FrameSender) {
         let (mut socket, addr) = match listener.accept().await {
             Ok(v) => v,
             Err(e) => {
-                eprintln!("[ingest slot {}] accept error: {}", slot, e);
+                tracing::info!("[ingest slot {}] accept error: {}", slot, e);
                 tokio::time::sleep(Duration::from_millis(200)).await;
                 continue;
             }
@@ -286,7 +287,7 @@ async fn ingest_loop(slot: u8, listener: TcpListener, sender: FrameSender) {
         // Local TCP, but disable Nagle so FFmpeg's small writes (the trailing
         // boundary) reach us promptly without a 40ms ack-delay penalty.
         let _ = socket.set_nodelay(true);
-        eprintln!("[ingest slot {}] ffmpeg connesso da {}", slot, addr);
+        tracing::info!("[ingest slot {}] ffmpeg connesso da {}", slot, addr);
 
         let mut parser = MjpegParser::new();
         let mut stats = IngestStats::new();
@@ -294,7 +295,7 @@ async fn ingest_loop(slot: u8, listener: TcpListener, sender: FrameSender) {
         loop {
             match socket.read(&mut buf).await {
                 Ok(0) => {
-                    eprintln!("[ingest slot {}] ffmpeg disconnesso", slot);
+                    tracing::info!("[ingest slot {}] ffmpeg disconnesso", slot);
                     break;
                 }
                 Ok(n) => {
@@ -314,12 +315,12 @@ async fn ingest_loop(slot: u8, listener: TcpListener, sender: FrameSender) {
                         stats.record(slot, viewers, size);
                     });
                     if let Err(e) = result {
-                        eprintln!("[ingest slot {}] parse error: {} - dropping connection", slot, e);
+                        tracing::info!("[ingest slot {}] parse error: {} - dropping connection", slot, e);
                         break;
                     }
                 }
                 Err(e) => {
-                    eprintln!("[ingest slot {}] read error: {}", slot, e);
+                    tracing::info!("[ingest slot {}] read error: {}", slot, e);
                     break;
                 }
             }
@@ -334,13 +335,13 @@ async fn keepalive_loop(slot: u8, hwnd: isize, state: SharedState) {
         interval.tick().await;
 
         if !is_window_alive(hwnd) {
-            eprintln!("[keepalive slot {}] finestra chiusa dall'utente, fermo stream", slot);
+            tracing::info!("[keepalive slot {}] finestra chiusa dall'utente, fermo stream", slot);
             remove_and_cleanup(&state, slot);
             break;
         }
 
         if is_window_minimized(hwnd) {
-            eprintln!("[keepalive slot {}] finestra minimizzata, ripristino", slot);
+            tracing::info!("[keepalive slot {}] finestra minimizzata, ripristino", slot);
             restore_window_silent(hwnd);
         }
     }
@@ -384,12 +385,14 @@ fn build_ffmpeg_args_with_capture(
         "-hide_banner",
         "-loglevel", "info",
         "-nostats",
+        "-fflags", "nobuffer",
         "-probesize", "32",
         "-analyzeduration", "0",
+        "-thread_queue_size", "512",
     ];
     let specific: &[&str] = match mode {
         StreamMode::Mjpeg => &[
-            "-vf", "mpdecimate=max=30",
+            "-vf", "fps=30,mpdecimate=max=30",
             "-fps_mode", "vfr",
             "-c:v", "mjpeg",
             "-q:v", "5",
@@ -436,54 +439,47 @@ fn build_ffmpeg_args_with_capture(
         .collect()
 }
 
-/// Shared launch path used by both the Win32/X11 `start_stream` and the
-/// Linux Wayland `start_wayland_stream`. Caller pre-validates the slot,
-/// parses the mode, and produces FFmpeg's capture-input args. Pass
-/// `keepalive_hwnd = Some(hwnd)` to enable the X11/Win32 minimize/close
-/// watchdog; pass `None` on Wayland (FFmpeg EOF triggers cleanup via the
-/// existing event watcher below).
-async fn launch_stream(
-    app: &tauri::AppHandle,
-    state: &SharedState,
+/// Bind the per-slot MJPEG ingest TCP listener and create the latest-frame
+/// watch channel. Returns `(None, None)` for non-MJPEG modes.
+async fn maybe_bind_mjpeg_listener(
     slot: u8,
-    title: String,
-    stream_mode: StreamMode,
-    capture_args: Vec<String>,
-    keepalive_hwnd: Option<isize>,
-) -> Result<StreamInfo, String> {
-    if state.sessions.lock().unwrap().contains_key(&slot) {
-        return Err(format!("Slot {} già in stream", slot));
+    mode: &StreamMode,
+) -> AppResult<(Option<FrameSender>, Option<TcpListener>)> {
+    if !matches!(mode, StreamMode::Mjpeg) {
+        return Ok((None, None));
     }
+    let port = ingest_port_for_slot(slot);
+    let listener = TcpListener::bind(("127.0.0.1", port))
+        .await
+        .map_err(|e| AppError::Msg(format!("Bind ingest port {}: {}", port, e)))?;
+    let (tx, _) = watch::channel::<Option<Bytes>>(None);
+    Ok((Some(Arc::new(tx)), Some(listener)))
+}
 
-    if stream_mode.is_webrtc() {
-        mediamtx::ensure(app, state).await?;
-    }
-
-    // For MJPEG, bind the local TCP listener and create a watch channel
-    // (latest-frame, no backlog) before spawning FFmpeg.
-    let (frame_tx, listener) = if matches!(stream_mode, StreamMode::Mjpeg) {
-        let port = ingest_port_for_slot(slot);
-        let listener = TcpListener::bind(("127.0.0.1", port)).await
-            .map_err(|e| format!("Bind ingest port {}: {}", port, e))?;
-        let (tx, _) = watch::channel::<Option<Bytes>>(None);
-        (Some(Arc::new(tx)), Some(listener))
-    } else {
-        (None, None)
-    };
-
-    let output_url = if stream_mode.is_webrtc() {
+/// FFmpeg output URL: RTMP for WebRTC (via MediaMTX), local TCP for MJPEG.
+fn output_url_for(slot: u8, mode: &StreamMode) -> String {
+    if mode.is_webrtc() {
         format!("rtmp://127.0.0.1:{}/slot{}", MEDIAMTX_RTMP_PORT, slot)
     } else {
         format!("tcp://127.0.0.1:{}", ingest_port_for_slot(slot))
-    };
+    }
+}
 
-    let sidecar = app.shell().sidecar("ffmpeg")
-        .map_err(|e| format!("ffmpeg sidecar non trovato: {}", e))?;
-    let args = build_ffmpeg_args_with_capture(&stream_mode, capture_args, &output_url);
-    let (mut rx, child) = sidecar.args(args).spawn()
-        .map_err(|e| format!("spawn fallito: {}", e))?;
-    let child = Arc::new(std::sync::Mutex::new(Some(child)));
-
+/// Spawn the ingest + keepalive tasks (where applicable) and register the
+/// session into shared state. Returns the StreamInfo describing the new
+/// session. Caller is responsible for spawning the FFmpeg-process watcher
+/// afterwards (the API differs between sidecar and std::process).
+fn register_session(
+    state: &SharedState,
+    slot: u8,
+    title: String,
+    mode: StreamMode,
+    backend: CaptureBackend,
+    frame_tx: Option<FrameSender>,
+    listener: Option<TcpListener>,
+    keepalive_hwnd: Option<isize>,
+    on_shutdown: Option<Box<dyn FnOnce() + Send>>,
+) -> StreamInfo {
     let ingest_task = match (listener, frame_tx.clone()) {
         (Some(l), Some(tx)) => Some(tauri::async_runtime::spawn(async move {
             ingest_loop(slot, l, tx).await;
@@ -501,30 +497,78 @@ async fn launch_stream(
     let info = StreamInfo {
         slot,
         title: title.clone(),
-        mode: stream_mode.clone(),
+        mode: mode.clone(),
     };
 
     state.sessions.lock().unwrap().insert(slot, StreamSession {
         title,
-        mode: stream_mode,
-        backend: CaptureBackend::Ffmpeg { child: Arc::clone(&child) },
+        mode,
+        backend,
         frame_tx,
         ingest_task,
         keepalive_task,
-        on_shutdown: None,
+        on_shutdown,
     });
 
-    // Spawn the FFmpeg event watcher. Inserted into the sessions map first so
-    // a fast-fail FFmpeg termination still finds the session to clean up.
-    let state_for_ff = Clone::clone(state);
+    info
+}
+
+/// Shared launch path used by both the Win32/X11 `start_stream` and the
+/// Linux Wayland `start_wayland_stream`. Caller pre-validates the slot,
+/// parses the mode, and produces FFmpeg's capture-input args. Pass
+/// `keepalive_hwnd = Some(hwnd)` to enable the X11/Win32 minimize/close
+/// watchdog; pass `None` on Wayland (FFmpeg EOF triggers cleanup via the
+/// existing event watcher below).
+async fn launch_stream(
+    app: &tauri::AppHandle,
+    state: &SharedState,
+    slot: u8,
+    title: String,
+    stream_mode: StreamMode,
+    capture_args: Vec<String>,
+    keepalive_hwnd: Option<isize>,
+) -> AppResult<StreamInfo> {
+    if state.sessions.lock().unwrap().contains_key(&slot) {
+        return Err(AppError::SlotInUse(slot));
+    }
+
+    if stream_mode.is_webrtc() {
+        mediamtx::ensure(app, state).await?;
+    }
+
+    let (frame_tx, listener) = maybe_bind_mjpeg_listener(slot, &stream_mode).await?;
+    let output_url = output_url_for(slot, &stream_mode);
+
+    let sidecar = app.shell().sidecar("ffmpeg")
+        .map_err(|e| AppError::Ffmpeg(format!("sidecar non trovato: {}", e)))?;
+    let args = build_ffmpeg_args_with_capture(&stream_mode, capture_args, &output_url);
+    let (mut rx, child) = sidecar.args(args).spawn()
+        .map_err(|e| AppError::Ffmpeg(format!("spawn fallito: {}", e)))?;
+    let child = Arc::new(std::sync::Mutex::new(Some(child)));
+
+    let info = register_session(
+        state,
+        slot,
+        title,
+        stream_mode,
+        CaptureBackend::Ffmpeg { child: Arc::clone(&child) },
+        frame_tx,
+        listener,
+        keepalive_hwnd,
+        None,
+    );
+
+    // Spawn the FFmpeg event watcher. The session is already inserted so a
+    // fast-fail FFmpeg termination still finds it to clean up.
+    let state_for_ff = state.clone();
     tauri::async_runtime::spawn(async move {
         while let Some(event) = rx.recv().await {
             match event {
                 CommandEvent::Stderr(line) => {
-                    eprintln!("[ffmpeg slot {}] {}", slot, String::from_utf8_lossy(&line));
+                    tracing::info!("[ffmpeg slot {}] {}", slot, String::from_utf8_lossy(&line));
                 }
                 CommandEvent::Terminated(payload) => {
-                    eprintln!("[ffmpeg slot {}] terminato: code={:?}", slot, payload.code);
+                    tracing::info!("[ffmpeg slot {}] terminato: code={:?}", slot, payload.code);
                     remove_and_cleanup(&state_for_ff, slot);
                 }
                 _ => {}
@@ -543,9 +587,9 @@ pub async fn start_stream(
     hwnd: isize,
     window_title: String,
     mode: String,
-) -> Result<StreamInfo, String> {
+) -> AppResult<StreamInfo> {
     if !(1..=4).contains(&slot) {
-        return Err(format!("Slot non valido: {}", slot));
+        return Err(AppError::InvalidSlot(slot));
     }
     let stream_mode = StreamMode::parse(&mode)?;
 
@@ -561,9 +605,9 @@ pub async fn start_stream(
 
 /// Resolve the FFmpeg binary path from the current executable's directory.
 #[cfg(target_os = "linux")]
-fn resolve_ffmpeg_path() -> Result<std::path::PathBuf, String> {
-    let exe = std::env::current_exe().map_err(|e| format!("current_exe: {}", e))?;
-    let dir = exe.parent().ok_or("no parent dir")?;
+fn resolve_ffmpeg_path() -> AppResult<std::path::PathBuf> {
+    let exe = std::env::current_exe()?;
+    let dir = exe.parent().ok_or(AppError::Ffmpeg("no parent dir".into()))?;
     let path = dir.join("binaries").join("ffmpeg-x86_64-unknown-linux-gnu");
     if path.exists() {
         return Ok(path);
@@ -571,14 +615,14 @@ fn resolve_ffmpeg_path() -> Result<std::path::PathBuf, String> {
     let output = std::process::Command::new("which")
         .arg("ffmpeg")
         .output()
-        .map_err(|e| format!("which ffmpeg: {}", e))?;
+        .map_err(|e| AppError::Ffmpeg(format!("which ffmpeg: {}", e)))?;
     if output.status.success() {
         let p = String::from_utf8_lossy(&output.stdout).trim().to_string();
         if !p.is_empty() {
             return Ok(std::path::PathBuf::from(p));
         }
     }
-    Err("FFmpeg not found".into())
+    Err(AppError::Ffmpeg("not found".into()))
 }
 
 /// Wayland portal capture path using native PipeWire frame reading.
@@ -598,23 +642,25 @@ pub async fn start_wayland_stream(
     slot: u8,
     source_id: u64,
     mode: String,
-) -> Result<StreamInfo, String> {
+) -> AppResult<StreamInfo> {
     if !(1..=4).contains(&slot) {
-        return Err(format!("Slot non valido: {}", slot));
+        return Err(AppError::InvalidSlot(slot));
     }
     let stream_mode = StreamMode::parse(&mode)?;
 
     if state.sessions.lock().unwrap().contains_key(&slot) {
-        return Err(format!("Slot {} già in stream", slot));
+        return Err(AppError::SlotInUse(slot));
     }
 
     let (node_id, label) = wayland
         .lookup(source_id)
-        .ok_or_else(|| format!("Wayland source {} non trovato", source_id))?;
+        .ok_or_else(|| AppError::Msg(format!("Wayland source {} non trovato", source_id)))?;
 
     let fd = wayland
         .dup_fd()?
-        .ok_or("Nessun PipeWire FD disponibile — eseguire wayland_select_sources prima")?;
+        .ok_or(AppError::Portal(
+            "FD non disponibile — eseguire wayland_select_sources prima".into(),
+        ))?;
 
     // Probe the negotiated format on a blocking thread so we know exactly
     // what width/height/pix_fmt to tell FFmpeg.
@@ -622,9 +668,10 @@ pub async fn start_wayland_stream(
         crate::pipewire_capture::probe_format(fd, node_id)
     })
     .await
-    .map_err(|e| format!("probe join: {}", e))??;
+    .map_err(|e| AppError::Pipewire(format!("probe join: {}", e)))?
+    .map_err(AppError::Pipewire)?;
 
-    eprintln!(
+    tracing::info!(
         "[wayland slot {}] probed format: {}x{} {}",
         slot, format.width, format.height, format.pix_fmt
     );
@@ -633,23 +680,8 @@ pub async fn start_wayland_stream(
         mediamtx::ensure(&app, &state).await?;
     }
 
-    // MJPEG needs the local TCP ingest listener + watch channel.
-    let (frame_tx, listener) = if matches!(stream_mode, StreamMode::Mjpeg) {
-        let port = ingest_port_for_slot(slot);
-        let listener = TcpListener::bind(("127.0.0.1", port))
-            .await
-            .map_err(|e| format!("Bind ingest port {}: {}", port, e))?;
-        let (tx, _) = watch::channel::<Option<Bytes>>(None);
-        (Some(Arc::new(tx)), Some(listener))
-    } else {
-        (None, None)
-    };
-
-    let output_url = if stream_mode.is_webrtc() {
-        format!("rtmp://127.0.0.1:{}/slot{}", MEDIAMTX_RTMP_PORT, slot)
-    } else {
-        format!("tcp://127.0.0.1:{}", ingest_port_for_slot(slot))
-    };
+    let (frame_tx, listener) = maybe_bind_mjpeg_listener(slot, &stream_mode).await?;
+    let output_url = output_url_for(slot, &stream_mode);
 
     // Pre-filter: clamp to 30 fps and scale to HD immediately so the encoder
     // never has to chew on 8K raw frames.  `fast_bilinear` is the cheapest
@@ -724,7 +756,7 @@ pub async fn start_wayland_stream(
         .stdin(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .map_err(|e| format!("FFmpeg spawn: {}", e))?;
+        .map_err(|e| AppError::Ffmpeg(format!("spawn: {}", e)))?;
 
     // From here on, any early-return must kill the child to avoid leaking an
     // orphan FFmpeg process holding stdin/output ports.
@@ -732,14 +764,14 @@ pub async fn start_wayland_stream(
         Some(s) => s,
         None => {
             let _ = child.kill();
-            return Err("FFmpeg stdin not available".into());
+            return Err(AppError::Ffmpeg("stdin not available".into()));
         }
     };
     let stderr = match child.stderr.take() {
         Some(s) => s,
         None => {
             let _ = child.kill();
-            return Err("FFmpeg stderr not available".into());
+            return Err(AppError::Ffmpeg("stderr not available".into()));
         }
     };
 
@@ -748,7 +780,7 @@ pub async fn start_wayland_stream(
     std::thread::spawn(move || {
         use std::io::{BufRead, BufReader};
         for line in BufReader::new(stderr).lines().flatten() {
-            eprintln!("[ffmpeg slot {}] {}", slot_for_log, line);
+            tracing::info!("[ffmpeg slot {}] {}", slot_for_log, line);
         }
     });
 
@@ -759,11 +791,11 @@ pub async fn start_wayland_stream(
         Ok(Some(fd)) => fd,
         Ok(None) => {
             let _ = child.kill();
-            return Err("FD non disponibile per pump".into());
+            return Err(AppError::Portal("FD non disponibile per pump".into()));
         }
         Err(e) => {
             let _ = child.kill();
-            return Err(e);
+            return Err(e.into());
         }
     };
     let mut stdin_writer = stdin;
@@ -775,46 +807,30 @@ pub async fn start_wayland_stream(
         Ok(h) => h,
         Err(e) => {
             let _ = child.kill();
-            return Err(format!("pw pump start: {}", e));
+            return Err(AppError::Pipewire(e));
         }
     };
-    let pump_handle = Arc::new(std::sync::Mutex::new(Some(pump)));
 
     let child = Arc::new(std::sync::Mutex::new(Some(child)));
 
-    let ingest_task = match (listener, frame_tx.clone()) {
-        (Some(l), Some(tx)) => Some(tauri::async_runtime::spawn(async move {
-            ingest_loop(slot, l, tx).await;
-        })),
-        _ => None,
-    };
+    // Pump is owned by the closure; calling stop() flips the pump's atomic
+    // alive flag and quits its mainloop. No Arc<Mutex<>> needed because the
+    // pump is created synchronously above before the session is registered.
+    let mut pump = pump;
+    let on_shutdown: Option<Box<dyn FnOnce() + Send>> =
+        Some(Box::new(move || pump.stop()));
 
-    let info = StreamInfo {
+    let info = register_session(
+        state.inner(),
         slot,
-        title: label.clone(),
-        mode: stream_mode.clone(),
-    };
-
-    let on_shutdown = {
-        let pump = Arc::clone(&pump_handle);
-        Some(Box::new(move || {
-            if let Some(mut h) = pump.lock().unwrap().take() {
-                h.stop();
-            }
-        }) as Box<dyn FnOnce() + Send>)
-    };
-
-    state.sessions.lock().unwrap().insert(slot, StreamSession {
-        title: label.clone(),
-        mode: stream_mode.clone(),
-        backend: CaptureBackend::FfmpegStd {
-            child: Arc::clone(&child),
-        },
+        label,
+        stream_mode,
+        CaptureBackend::FfmpegStd { child: Arc::clone(&child) },
         frame_tx,
-        ingest_task,
-        keepalive_task: None,
+        listener,
+        None,
         on_shutdown,
-    });
+    );
 
     // Watch for FFmpeg process exit and clean up the session.
     let state_for_ff = state.inner().clone();
@@ -825,7 +841,7 @@ pub async fn start_wayland_stream(
                 let _ = c.wait();
             }
         }).await;
-        eprintln!("[ffmpeg slot {}] exited", watch_slot);
+        tracing::info!("[ffmpeg slot {}] exited", watch_slot);
         remove_and_cleanup(&state_for_ff, watch_slot);
     });
 
@@ -833,11 +849,11 @@ pub async fn start_wayland_stream(
 }
 
 #[tauri::command]
-pub fn stop_stream(state: State<'_, SharedState>, slot: u8) -> Result<(), String> {
+pub fn stop_stream(state: State<'_, SharedState>, slot: u8) -> AppResult<()> {
     if remove_and_cleanup(state.inner(), slot) {
         Ok(())
     } else {
-        Err(format!("Nessuno stream attivo per slot {}", slot))
+        Err(AppError::NoStream(slot))
     }
 }
 

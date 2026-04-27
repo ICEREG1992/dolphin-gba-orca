@@ -40,14 +40,14 @@ fn detect_gba_slot(title: &str) -> Option<u8> {
 /// an empty window list and the helpers no-op.
 fn open() -> Option<(RustConnection, usize, Atoms)> {
     let (conn, screen_num) = x11rb::connect(None)
-        .map_err(|e| eprintln!("[x11] connect failed: {}", e))
+        .map_err(|e| tracing::warn!("[x11] connect failed: {}", e))
         .ok()?;
     let cookie = Atoms::new(&conn)
-        .map_err(|e| eprintln!("[x11] atom request failed: {}", e))
+        .map_err(|e| tracing::warn!("[x11] atom request failed: {}", e))
         .ok()?;
     let atoms = cookie
         .reply()
-        .map_err(|e| eprintln!("[x11] atom reply failed: {}", e))
+        .map_err(|e| tracing::warn!("[x11] atom reply failed: {}", e))
         .ok()?;
     Some((conn, screen_num, atoms))
 }

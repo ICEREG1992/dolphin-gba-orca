@@ -1,5 +1,7 @@
 use serde::Serialize;
 
+use crate::error::AppResult;
+
 pub const HTTP_PORT: u16 = 8080;
 pub const MEDIAMTX_RTMP_PORT: u16 = 1935;
 pub const MEDIAMTX_WEBRTC_PORT: u16 = 8889;
@@ -45,7 +47,7 @@ fn score_interface(name: &str, ip: &std::net::Ipv4Addr) -> i32 {
 }
 
 #[tauri::command]
-pub fn get_server_info() -> Result<ServerInfo, String> {
+pub fn get_server_info() -> AppResult<ServerInfo> {
     use local_ip_address::list_afinet_netifas;
     use std::net::IpAddr;
 
