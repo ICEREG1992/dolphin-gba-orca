@@ -44,12 +44,6 @@ cd dolphin-gba-orca
 npm install
 ```
 
-Download an FFmpeg build for Windows ([gyan.dev essentials](https://www.gyan.dev/ffmpeg/builds/)), then drop `ffmpeg.exe` into `src-tauri/binaries/` renamed as:
-
-```
-src-tauri/binaries/ffmpeg-x86_64-pc-windows-msvc.exe
-```
-
 Then:
 
 ```bash
