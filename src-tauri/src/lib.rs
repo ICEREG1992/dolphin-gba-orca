@@ -79,10 +79,23 @@ fn setup_job_object() {
     }
 }
 
+/// Disable WebKitGTK's DMA-BUF renderer (and compositing mode) before WebView
+/// initialization. The DMA-BUF renderer breaks on many Linux GPU drivers,
+/// causing a black/blank WebView; this is the workaround recommended upstream.
+#[cfg(target_os = "linux")]
+fn setup_linux_env() {
+    unsafe {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(windows)]
     setup_job_object();
+    #[cfg(target_os = "linux")]
+    setup_linux_env();
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
