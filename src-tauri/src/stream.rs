@@ -56,13 +56,15 @@ pub struct StreamSession {
     /// frame instead of accumulating a backlog. None for WebRTC sessions.
     pub frame_tx: Option<FrameSender>,
     pub ingest_task: Option<tauri::async_runtime::JoinHandle<()>>,
-    pub keepalive_task: tauri::async_runtime::JoinHandle<()>,
+    /// X11/Win32 keepalive task that watches the source HWND. None on
+    /// Wayland (no HWND — FFmpeg EOF handles cleanup instead).
+    pub keepalive_task: Option<tauri::async_runtime::JoinHandle<()>>,
 }
 
 pub fn shutdown_session(session: StreamSession) {
     let _ = session.child.kill();
     if let Some(task) = session.ingest_task { task.abort(); }
-    session.keepalive_task.abort();
+    if let Some(task) = session.keepalive_task { task.abort(); }
 }
 
 #[derive(Serialize, Clone)]
@@ -330,7 +332,7 @@ async fn keepalive_loop(slot: u8, hwnd: isize, state: SharedState) {
 /// target window is identified. On Windows that's `gdigrab` + `-i title=`;
 /// on Linux X11 that's `x11grab` + `-window_id` (XComposite-tracked) with
 /// the X display as the input URL. Everything else (codec, filter, muxer)
-/// is shared across platforms in `build_ffmpeg_args`.
+/// is shared across platforms in `build_ffmpeg_args_with_capture`.
 #[cfg(windows)]
 fn capture_input_args(_hwnd: isize, title: &str) -> Vec<String> {
     vec![
@@ -351,10 +353,15 @@ fn capture_input_args(hwnd: isize, _title: &str) -> Vec<String> {
     ]
 }
 
-/// Build the full FFmpeg arg list for a given mode. Capture input args are
-/// platform-specific (gdigrab/x11grab); per-mode args cover the video filter,
-/// codec, pixel format, and output muxer.
-fn build_ffmpeg_args(mode: &StreamMode, hwnd: isize, window_title: &str, output_url: &str) -> Vec<String> {
+/// Build the full FFmpeg arg list for a given mode + caller-provided
+/// capture-input args. Used by both the platform-native path
+/// (gdigrab/x11grab via `capture_input_args`) and the Wayland portal
+/// path (libpipewire with a portal-granted node id).
+fn build_ffmpeg_args_with_capture(
+    mode: &StreamMode,
+    capture: Vec<String>,
+    output_url: &str,
+) -> Vec<String> {
     let prelude: &[&str] = &[
         "-hide_banner",
         "-loglevel", "info",
@@ -362,7 +369,6 @@ fn build_ffmpeg_args(mode: &StreamMode, hwnd: isize, window_title: &str, output_
         "-probesize", "32",
         "-analyzeduration", "0",
     ];
-    let capture = capture_input_args(hwnd, window_title);
     let specific: &[&str] = match mode {
         StreamMode::Mjpeg => &[
             "-vf", "mpdecimate=max=30",
@@ -412,32 +418,27 @@ fn build_ffmpeg_args(mode: &StreamMode, hwnd: isize, window_title: &str, output_
         .collect()
 }
 
-#[tauri::command]
-pub async fn start_stream(
-    app: tauri::AppHandle,
-    state: State<'_, SharedState>,
+/// Shared launch path used by both the Win32/X11 `start_stream` and the
+/// Linux Wayland `start_wayland_stream`. Caller pre-validates the slot,
+/// parses the mode, and produces FFmpeg's capture-input args. Pass
+/// `keepalive_hwnd = Some(hwnd)` to enable the X11/Win32 minimize/close
+/// watchdog; pass `None` on Wayland (FFmpeg EOF triggers cleanup via the
+/// existing event watcher below).
+async fn launch_stream(
+    app: &tauri::AppHandle,
+    state: &SharedState,
     slot: u8,
-    hwnd: isize,
-    window_title: String,
-    mode: String,
+    title: String,
+    stream_mode: StreamMode,
+    capture_args: Vec<String>,
+    keepalive_hwnd: Option<isize>,
 ) -> Result<StreamInfo, String> {
-    if !(1..=4).contains(&slot) {
-        return Err(format!("Slot non valido: {}", slot));
-    }
-    let stream_mode = StreamMode::parse(&mode)?;
-
     if state.sessions.lock().unwrap().contains_key(&slot) {
         return Err(format!("Slot {} già in stream", slot));
     }
 
     if stream_mode.is_webrtc() {
-        mediamtx::ensure(&app, &state).await?;
-    }
-
-    // If the window is minimized, unminimize without stealing focus.
-    if is_window_minimized(hwnd) {
-        restore_window_silent(hwnd);
-        tokio::time::sleep(Duration::from_millis(150)).await;
+        mediamtx::ensure(app, state).await?;
     }
 
     // For MJPEG, bind the local TCP listener and create a watch channel
@@ -460,11 +461,10 @@ pub async fn start_stream(
 
     let sidecar = app.shell().sidecar("ffmpeg")
         .map_err(|e| format!("ffmpeg sidecar non trovato: {}", e))?;
-    let args = build_ffmpeg_args(&stream_mode, hwnd, &window_title, &output_url);
+    let args = build_ffmpeg_args_with_capture(&stream_mode, capture_args, &output_url);
     let (mut rx, child) = sidecar.args(args).spawn()
         .map_err(|e| format!("spawn fallito: {}", e))?;
 
-    // Spawn the MJPEG ingest task (no-op for WebRTC modes).
     let ingest_task = match (listener, frame_tx.clone()) {
         (Some(l), Some(tx)) => Some(tauri::async_runtime::spawn(async move {
             ingest_loop(slot, l, tx).await;
@@ -472,22 +472,22 @@ pub async fn start_stream(
         _ => None,
     };
 
-    // Spawn the keepalive task: re-restore the window if the user re-minimizes
-    // it, and stop the stream if the window is closed.
-    let state_for_ka = state.inner().clone();
-    let keepalive_task = tauri::async_runtime::spawn(async move {
-        keepalive_loop(slot, hwnd, state_for_ka).await;
+    let keepalive_task = keepalive_hwnd.map(|hwnd| {
+        let state_for_ka = state.clone();
+        tauri::async_runtime::spawn(async move {
+            keepalive_loop(slot, hwnd, state_for_ka).await;
+        })
     });
 
     let info = StreamInfo {
         slot,
-        title: window_title.clone(),
+        title: title.clone(),
         mode: stream_mode.clone(),
         url: stream_url(slot, &stream_mode),
     };
 
     state.sessions.lock().unwrap().insert(slot, StreamSession {
-        title: window_title,
+        title,
         mode: stream_mode,
         child,
         frame_tx,
@@ -497,7 +497,7 @@ pub async fn start_stream(
 
     // Spawn the FFmpeg event watcher. Inserted into the sessions map first so
     // a fast-fail FFmpeg termination still finds the session to clean up.
-    let state_for_ff = state.inner().clone();
+    let state_for_ff = state.clone();
     tauri::async_runtime::spawn(async move {
         while let Some(event) = rx.recv().await {
             match event {
@@ -514,6 +514,62 @@ pub async fn start_stream(
     });
 
     Ok(info)
+}
+
+#[tauri::command]
+pub async fn start_stream(
+    app: tauri::AppHandle,
+    state: State<'_, SharedState>,
+    slot: u8,
+    hwnd: isize,
+    window_title: String,
+    mode: String,
+) -> Result<StreamInfo, String> {
+    if !(1..=4).contains(&slot) {
+        return Err(format!("Slot non valido: {}", slot));
+    }
+    let stream_mode = StreamMode::parse(&mode)?;
+
+    // If the window is minimized, unminimize without stealing focus.
+    if is_window_minimized(hwnd) {
+        restore_window_silent(hwnd);
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+
+    let capture = capture_input_args(hwnd, &window_title);
+    launch_stream(&app, state.inner(), slot, window_title, stream_mode, capture, Some(hwnd)).await
+}
+
+/// Wayland portal capture path. The user must first call
+/// `wayland_select_sources` to grant access; this command then takes the
+/// captured PipeWire node id (looked up via WaylandData) and feeds it to
+/// FFmpeg's `libpipewire` input device. No keepalive — FFmpeg EOF on the
+/// PipeWire stream triggers cleanup.
+#[cfg(target_os = "linux")]
+#[tauri::command]
+pub async fn start_wayland_stream(
+    app: tauri::AppHandle,
+    state: State<'_, SharedState>,
+    wayland: State<'_, crate::wayland_api::WaylandData>,
+    slot: u8,
+    source_id: u64,
+    mode: String,
+) -> Result<StreamInfo, String> {
+    if !(1..=4).contains(&slot) {
+        return Err(format!("Slot non valido: {}", slot));
+    }
+    let stream_mode = StreamMode::parse(&mode)?;
+
+    let (node_id, label) = wayland
+        .lookup(source_id)
+        .ok_or_else(|| format!("Wayland source {} non trovato", source_id))?;
+
+    let capture = vec![
+        "-f".into(), "libpipewire".into(),
+        "-framerate".into(), "30".into(),
+        "-i".into(), node_id.to_string(),
+    ];
+    launch_stream(&app, state.inner(), slot, label, stream_mode, capture, None).await
 }
 
 #[tauri::command]

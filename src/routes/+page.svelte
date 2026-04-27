@@ -27,6 +27,12 @@
       webrtc: "WebRTC",
       webrtcPlus: "WebRTC++",
       webrtcVp9: "WebRTC VP9",
+      waylandTitle: "Modalità Wayland",
+      waylandHint: "Su Wayland l'enumerazione automatica delle finestre non è permessa. Seleziona le finestre GBA tramite il portal di sistema.",
+      selectGbaWindows: "Seleziona finestre GBA",
+      noWaylandSourcesYet: "Nessuna sorgente selezionata. Clicca sopra per aprire il portal.",
+      assignSlot: "Assegna",
+      sourceLabel: "Sorgente",
     },
     en: {
       refresh: "Refresh",
@@ -51,6 +57,12 @@
       webrtc: "WebRTC",
       webrtcPlus: "WebRTC++",
       webrtcVp9: "WebRTC VP9",
+      waylandTitle: "Wayland mode",
+      waylandHint: "Wayland forbids automatic window enumeration. Pick the GBA windows through the system portal dialog.",
+      selectGbaWindows: "Select GBA windows",
+      noWaylandSourcesYet: "No source selected yet. Click the button above to open the portal.",
+      assignSlot: "Assign",
+      sourceLabel: "Source",
     },
   };
 
@@ -75,6 +87,13 @@
   let error = "";
   let autoScanInterval = null;
   let streamMode = "mjpeg";
+
+  // Wayland-specific state. On Wayland we cannot enumerate windows: the user
+  // must pick them via xdg-desktop-portal, then assign each captured PipeWire
+  // source to a slot.
+  let isWayland = false;
+  let waylandSources = [];
+  let waylandBusy = false;
 
   $: serverUrl = `http://${selectedIp || "..."}:${server.port}`;
 
@@ -161,10 +180,71 @@
     navigator.clipboard?.writeText(text);
   }
 
-  onMount(() => {
+  async function refreshWaylandSources() {
+    try {
+      waylandSources = await invoke("wayland_list_sources");
+    } catch (e) {
+      console.error("wayland_list_sources:", e);
+    }
+  }
+
+  async function selectWaylandSources() {
+    error = "";
+    waylandBusy = true;
+    try {
+      waylandSources = await invoke("wayland_select_sources");
+    } catch (e) {
+      error = String(e);
+    } finally {
+      waylandBusy = false;
+    }
+  }
+
+  async function assignWaylandSlot(source, raw) {
+    const parsed = parseInt(raw, 10);
+    const slot = Number.isFinite(parsed) && parsed >= 1 && parsed <= 4 ? parsed : null;
+    error = "";
+    try {
+      waylandSources = await invoke("wayland_assign_slot", {
+        sourceId: source.id,
+        slot,
+      });
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  async function startWaylandStream(source) {
+    if (!source.gba_slot) return;
+    error = "";
+    try {
+      await invoke("start_wayland_stream", {
+        slot: source.gba_slot,
+        sourceId: source.id,
+        mode: streamMode,
+      });
+      await refreshStreams();
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  onMount(async () => {
     loadServerInfo();
-    doScan(false);
-    autoScanInterval = setInterval(() => doScan(true), 3000);
+    try {
+      isWayland = await invoke("is_wayland");
+    } catch (e) {
+      isWayland = false;
+    }
+    if (isWayland) {
+      await refreshWaylandSources();
+      await refreshStreams();
+      // Stream list still polls so dead FFmpeg processes free their slot.
+      autoScanInterval = setInterval(refreshStreams, 3000);
+    } else {
+      doScan(false);
+      autoScanInterval = setInterval(() => doScan(true), 3000);
+    }
   });
 
   onDestroy(() => {
@@ -178,13 +258,19 @@
   </div>
 
   <div class="toolbar">
-    <button on:click={() => doScan(false)} disabled={loading}>
-      {loading ? t.scanning : t.refresh}
-    </button>
-    <label class="chk">
-      <input type="checkbox" bind:checked={gbaOnly} />
-      {t.gbaOnly}
-    </label>
+    {#if isWayland}
+      <button on:click={selectWaylandSources} disabled={waylandBusy}>
+        {t.selectGbaWindows}
+      </button>
+    {:else}
+      <button on:click={() => doScan(false)} disabled={loading}>
+        {loading ? t.scanning : t.refresh}
+      </button>
+      <label class="chk">
+        <input type="checkbox" bind:checked={gbaOnly} />
+        {t.gbaOnly}
+      </label>
+    {/if}
     <span class="sep"></span>
     <label class="chk">
       {t.mode}:
@@ -196,7 +282,11 @@
       </select>
     </label>
     <span class="sep"></span>
-    <span class="info">{t.autoScan}</span>
+    {#if isWayland}
+      <span class="info">{t.waylandTitle}</span>
+    {:else}
+      <span class="info">{t.autoScan}</span>
+    {/if}
     <span class="grow"></span>
     <label class="chk">
       {t.language}:
@@ -226,53 +316,113 @@
   {/if}
 
   <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th style="width:50px">{t.slot}</th>
-          <th>{t.windowTitle}</th>
-          <th style="width:80px">PID</th>
-          <th style="width:90px">{t.size}</th>
-          <th style="width:320px">{t.status}</th>
-        </tr>
-      </thead>
-      <tbody>
-        {#each windows as w (w.hwnd)}
-          <tr class:gba={w.gba_slot}>
-            <td class="slot-cell">
-              {#if w.gba_slot}<b>GBA{w.gba_slot}</b>{/if}
-            </td>
-            <td class="title-cell" title={w.title}>{w.title}</td>
-            <td class="mono">{w.pid}</td>
-            <td class="mono">{w.width}×{w.height}</td>
-            <td>
-              {#if w.gba_slot}
-                {#if streams[w.gba_slot]}
-                  {@const s = streams[w.gba_slot]}
-                  {@const url = streamViewUrl(w.gba_slot, s.mode)}
-                  <span class="mode-badge" class:webrtc={s.mode === 'Webrtc' || s.mode === 'WebrtcPlus' || s.mode === 'WebrtcVp9'}>
-                    {modeLabel(s.mode)}
-                  </span>
-                  <code class="url" on:click={() => copyToClipboard(url)} title={t.clickToCopy}>
-                    {url}
-                  </code>
-                  <button on:click={() => stopStream(w.gba_slot)}>{t.stop}</button>
-                {:else}
-                  <button on:click={() => startStream(w)}>{t.startStream}</button>
-                {/if}
-              {/if}
-            </td>
+    {#if isWayland}
+      <div class="wayland-hint">{t.waylandHint}</div>
+      <table>
+        <thead>
+          <tr>
+            <th style="width:50px">{t.slot}</th>
+            <th>{t.sourceLabel}</th>
+            <th style="width:120px">{t.assignSlot}</th>
+            <th style="width:320px">{t.status}</th>
           </tr>
-        {/each}
-        {#if windows.length === 0}
-          <tr><td colspan="5" class="empty">{t.noWindows}</td></tr>
-        {/if}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {#each waylandSources as src (src.id)}
+            <tr class:gba={src.gba_slot}>
+              <td class="slot-cell">
+                {#if src.gba_slot}<b>GBA{src.gba_slot}</b>{/if}
+              </td>
+              <td class="title-cell" title={src.label}>{src.label}</td>
+              <td>
+                <select
+                  value={src.gba_slot ?? ""}
+                  on:change={(e) => assignWaylandSlot(src, e.target.value)}
+                >
+                  <option value="">—</option>
+                  <option value="1">GBA1</option>
+                  <option value="2">GBA2</option>
+                  <option value="3">GBA3</option>
+                  <option value="4">GBA4</option>
+                </select>
+              </td>
+              <td>
+                {#if src.gba_slot}
+                  {#if streams[src.gba_slot]}
+                    {@const s = streams[src.gba_slot]}
+                    {@const url = streamViewUrl(src.gba_slot, s.mode)}
+                    <span class="mode-badge" class:webrtc={s.mode === 'Webrtc' || s.mode === 'WebrtcPlus' || s.mode === 'WebrtcVp9'}>
+                      {modeLabel(s.mode)}
+                    </span>
+                    <code class="url" on:click={() => copyToClipboard(url)} title={t.clickToCopy}>
+                      {url}
+                    </code>
+                    <button on:click={() => stopStream(src.gba_slot)}>{t.stop}</button>
+                  {:else}
+                    <button on:click={() => startWaylandStream(src)}>{t.startStream}</button>
+                  {/if}
+                {/if}
+              </td>
+            </tr>
+          {/each}
+          {#if waylandSources.length === 0}
+            <tr><td colspan="4" class="empty">{t.noWaylandSourcesYet}</td></tr>
+          {/if}
+        </tbody>
+      </table>
+    {:else}
+      <table>
+        <thead>
+          <tr>
+            <th style="width:50px">{t.slot}</th>
+            <th>{t.windowTitle}</th>
+            <th style="width:80px">PID</th>
+            <th style="width:90px">{t.size}</th>
+            <th style="width:320px">{t.status}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {#each windows as w (w.hwnd)}
+            <tr class:gba={w.gba_slot}>
+              <td class="slot-cell">
+                {#if w.gba_slot}<b>GBA{w.gba_slot}</b>{/if}
+              </td>
+              <td class="title-cell" title={w.title}>{w.title}</td>
+              <td class="mono">{w.pid}</td>
+              <td class="mono">{w.width}×{w.height}</td>
+              <td>
+                {#if w.gba_slot}
+                  {#if streams[w.gba_slot]}
+                    {@const s = streams[w.gba_slot]}
+                    {@const url = streamViewUrl(w.gba_slot, s.mode)}
+                    <span class="mode-badge" class:webrtc={s.mode === 'Webrtc' || s.mode === 'WebrtcPlus' || s.mode === 'WebrtcVp9'}>
+                      {modeLabel(s.mode)}
+                    </span>
+                    <code class="url" on:click={() => copyToClipboard(url)} title={t.clickToCopy}>
+                      {url}
+                    </code>
+                    <button on:click={() => stopStream(w.gba_slot)}>{t.stop}</button>
+                  {:else}
+                    <button on:click={() => startStream(w)}>{t.startStream}</button>
+                  {/if}
+                {/if}
+              </td>
+            </tr>
+          {/each}
+          {#if windows.length === 0}
+            <tr><td colspan="5" class="empty">{t.noWindows}</td></tr>
+          {/if}
+        </tbody>
+      </table>
+    {/if}
   </div>
 
   <div class="statusbar">
-    <span>{windows.length} {t.windowsLabel}</span>
+    {#if isWayland}
+      <span>{waylandSources.length} {t.sourceLabel}</span>
+    {:else}
+      <span>{windows.length} {t.windowsLabel}</span>
+    {/if}
     <span class="sep-v"></span>
     <span>{Object.keys(streams).length} {t.activeStreams}</span>
     <span class="grow"></span>
@@ -497,5 +647,13 @@
     width: 1px;
     height: 12px;
     background: #d0d0d0;
+  }
+
+  .wayland-hint {
+    background: #fff8e1;
+    border-bottom: 1px solid #f0d878;
+    padding: 6px 10px;
+    color: #555;
+    font-style: italic;
   }
 </style>

@@ -12,6 +12,8 @@ mod stream;
 mod windows_api;
 #[cfg(target_os = "linux")]
 mod x11_api;
+#[cfg(target_os = "linux")]
+mod wayland_api;
 
 mod platform {
     #[cfg(windows)]
@@ -90,16 +92,35 @@ fn setup_linux_env() {
     }
 }
 
+/// Always-available command so the frontend can branch on session type
+/// without per-platform compile-time gating in JS.
+#[tauri::command]
+fn is_wayland() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        wayland_api::is_wayland_session()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(windows)]
     setup_job_object();
     #[cfg(target_os = "linux")]
     setup_linux_env();
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
-        .manage(SharedState::default())
+        .manage(SharedState::default());
+
+    #[cfg(target_os = "linux")]
+    let builder = builder.manage(wayland_api::WaylandData::default());
+
+    builder
         .setup(|app| {
             let state = app.state::<SharedState>().inner().clone();
             tauri::async_runtime::spawn(async move {
@@ -115,12 +136,21 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            is_wayland,
             platform::list_windows,
             platform::list_gba_windows,
             stream::start_stream,
             stream::stop_stream,
             stream::list_streams,
             network::get_server_info,
+            #[cfg(target_os = "linux")]
+            wayland_api::wayland_list_sources,
+            #[cfg(target_os = "linux")]
+            wayland_api::wayland_select_sources,
+            #[cfg(target_os = "linux")]
+            wayland_api::wayland_assign_slot,
+            #[cfg(target_os = "linux")]
+            stream::start_wayland_stream,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
