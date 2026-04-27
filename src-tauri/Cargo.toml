@@ -1,7 +1,7 @@
 [package]
 name = "gba-orca"
-version = "0.1.9"
-description = "A Tauri App"
+version = "0.2.0"
+description = "GBA Orca v2.0"
 authors = ["you"]
 edition = "2021"
 
