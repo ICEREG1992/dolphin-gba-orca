@@ -817,8 +817,53 @@ async fn run_http_server(state: SharedState) {
 
 // ============= ENTRY POINT =============
 
+fn setup_job_object() {
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::System::JobObjects::*;
+    use windows::Win32::System::Threading::GetCurrentProcess;
+
+    unsafe {
+        let job = match CreateJobObjectW(None, PCWSTR::null()) {
+            Ok(h) => h,
+            Err(e) => {
+                eprintln!("[job] CreateJobObjectW failed: {}", e);
+                return;
+            }
+        };
+
+        let mut info = JOBOBJECT_BASIC_LIMIT_INFORMATION::default();
+        info.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+
+        if let Err(e) = SetInformationJobObject(
+            job,
+            JobObjectBasicLimitInformation,
+            &info as *const _ as *const _,
+            std::mem::size_of::<JOBOBJECT_BASIC_LIMIT_INFORMATION>() as u32,
+        ) {
+            eprintln!("[job] SetInformationJobObject failed: {}", e);
+            return;
+        }
+
+        if let Err(e) = AssignProcessToJobObject(job, GetCurrentProcess()) {
+            eprintln!("[job] AssignProcessToJobObject failed: {}", e);
+            return;
+        }
+
+        // Wrap in a non-Copy type so it won't be dropped (closing the handle).
+        // The Job Object handle must stay open for the process lifetime — when
+        // the process exits, the kernel closes the handle and KILL_ON_JOB_CLOSE
+        // terminates all child processes in the job.
+        #[allow(dead_code)]
+        struct JobHandle(HANDLE);
+        std::mem::forget(JobHandle(job));
+        eprintln!("[job] KILL_ON_JOB_CLOSE job object created");
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    setup_job_object();
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
@@ -829,6 +874,23 @@ pub fn run() {
                 run_http_server(state).await;
             });
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                let state = window.state::<SharedState>().inner().clone();
+                let mut sessions = state.sessions.lock().unwrap();
+                for (_, session) in sessions.drain() {
+                    shutdown_session(session);
+                }
+                drop(sessions);
+                let mut mtx = state.mediamtx.lock().unwrap();
+                if let Some(child) = mtx.child.take() {
+                    let _ = child.kill();
+                }
+                if let Some(task) = mtx.event_task.take() {
+                    task.abort();
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             list_windows,
