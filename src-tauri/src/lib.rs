@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use tauri::Manager;
+use tauri::{Manager, State};
 
 mod error;
 mod http;
@@ -36,7 +36,7 @@ pub(crate) fn detect_gba_slot(title: &str) -> Option<u8> {
     SLOTS.iter().find(|(s, _)| title.contains(s)).map(|(_, n)| *n)
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub(crate) struct SharedState {
     pub sessions: Arc<Mutex<HashMap<u8, StreamSession>>>,
     pub mediamtx: Arc<Mutex<MediamtxState>>,
@@ -45,6 +45,18 @@ pub(crate) struct SharedState {
     /// for port 1935). std::sync::Mutex would deadlock across the spawn's
     /// .await; tokio::sync::Mutex is safe to hold over awaits.
     pub mediamtx_starter: Arc<tokio::sync::Mutex<()>>,
+    pub remote_controller: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Default for SharedState {
+    fn default() -> Self {
+        Self {
+            sessions: Arc::new(Mutex::new(HashMap::new())),
+            mediamtx: Arc::new(Mutex::new(MediamtxState::default())),
+            mediamtx_starter: Arc::new(tokio::sync::Mutex::new(())),
+            remote_controller: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
 }
 
 /// Create a Windows Job Object with KILL_ON_JOB_CLOSE and assign the current
@@ -122,6 +134,16 @@ fn is_wayland() -> bool {
     }
 }
 
+#[tauri::command]
+fn set_remote_controller(state: State<'_, SharedState>, enabled: bool) {
+    state.remote_controller.store(enabled, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[tauri::command]
+fn get_remote_controller(state: State<'_, SharedState>) -> bool {
+    state.remote_controller.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Initialize the global tracing subscriber. Defaults to `info` for our
 /// crate; users can override with `RUST_LOG=debug` or finer-grained filters.
 fn init_tracing() {
@@ -166,6 +188,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             is_wayland,
+            set_remote_controller,
+            get_remote_controller,
             platform::list_windows,
             platform::list_gba_windows,
             stream::start_stream,

@@ -10,6 +10,7 @@
       gbaOnly: "Solo finestre GBA",
       autoScan: "Auto-scan: 3s",
       server: "Server:",
+      remoteController: "Controller da remoto",
       clickToCopy: "Click per copiare",
       slot: "Slot",
       windowTitle: "Titolo finestra",
@@ -44,6 +45,7 @@
       gbaOnly: "GBA windows only",
       autoScan: "Auto-scan: 3s",
       server: "Server:",
+      remoteController: "Remote controller",
       clickToCopy: "Click to copy",
       slot: "Slot",
       windowTitle: "Window title",
@@ -95,6 +97,7 @@
   let error = "";
   let autoScanInterval = null;
   let streamMode = "mjpeg";
+  let remoteController = false;
 
   // Wayland-specific state. On Wayland we cannot enumerate windows: the user
   // must pick them via xdg-desktop-portal, then assign each captured PipeWire
@@ -196,6 +199,14 @@
     }
   }
 
+  async function toggleRemoteController() {
+    try {
+      await invoke("set_remote_controller", { enabled: remoteController });
+    } catch (e) {
+      console.error("set_remote_controller:", e);
+    }
+  }
+
   async function selectWaylandSources() {
     error = "";
     waylandBusy = true;
@@ -239,6 +250,11 @@
 
   onMount(async () => {
     await loadServerInfo();
+    try {
+      remoteController = await invoke("get_remote_controller");
+    } catch (e) {
+      remoteController = false;
+    }
     try {
       isWayland = await invoke("is_wayland");
     } catch (e) {
@@ -300,6 +316,12 @@
         <option value="webrtc-vp9">{t.webrtcVp9}</option>
       </select>
     </label>
+    {#if streamMode === 'mjpeg'}
+      <label class="chk">
+        <input type="checkbox" bind:checked={remoteController} on:change={toggleRemoteController} />
+        {t.remoteController}
+      </label>
+    {/if}
     <span class="sep"></span>
     {#if isWayland}
       <span class="info">{t.waylandTitle}</span>

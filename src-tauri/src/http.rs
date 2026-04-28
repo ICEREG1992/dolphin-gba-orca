@@ -84,27 +84,26 @@ document.getElementById('player').src = 'http://' + window.location.hostname + '
 </body></html>"#;
 
 const GAMEPAD_CSS: &str = r#"
+.gp-wrap{position:fixed;top:12px;right:12px;display:flex;gap:6px;align-items:center;z-index:10}
 .gp-btn{
-  position:fixed;
-  top:14px;
-  right:14px;
-  padding:8px 14px;
+  padding:10px 18px;
   border:none;
-  border-radius:18px;
-  background:rgba(255,255,255,.18);
+  border-radius:22px;
+  background:rgba(0,120,215,0.92);
   color:#fff;
-  font:500 13px system-ui,sans-serif;
+  font:600 15px system-ui,sans-serif;
   cursor:pointer;
   -webkit-tap-highlight-color:transparent;
-  z-index:10;
-  backdrop-filter:blur(4px);
+  backdrop-filter:blur(6px);
+  box-shadow:0 3px 10px rgba(0,0,0,0.4);
 }
-.gp-btn:active{background:rgba(255,255,255,.35)}
-.gp-btn.on{background:rgba(60,200,90,.45)}
+.gp-btn:active{background:rgba(0,100,190,0.98)}
+.gp-btn.on{background:rgba(60,200,90,0.95)}
+.gp-close{width:34px;height:34px;padding:0;display:flex;align-items:center;justify-content:center;border-radius:50%;font-size:18px;line-height:1;background:rgba(0,120,215,0.92)}
 "#;
 
 const GAMEPAD_HTML: &str =
-    r#"<button id="gp-status" class="gp-btn" onclick="connectGamepad()">🎮 Connetti controller</button>"#;
+    r#"<div id="gp-wrap" class="gp-wrap"><button id="gp-status" class="gp-btn" onclick="connectGamepad()">🎮 Connetti controller</button><button id="gp-close" class="gp-btn gp-close" onclick="dismissGamepad()" title="Chiudi">×</button></div>"#;
 
 // Tiny client: open WS once user taps the button, find a gamepad (browsers
 // only expose one after a button press on the page), poll at rAF rate, send
@@ -113,27 +112,43 @@ const GAMEPAD_HTML: &str =
 const GAMEPAD_JS: &str = r#"
 const SLOT={slot};
 let ws=null,gpIndex=null,prev=null;
+let gpHideTimer=null;
+let gpDismissed=false;
+let autoScanId=null;
 function setStatus(t,on){
   const e=document.getElementById('gp-status');
   if(!e)return;
   e.textContent=t;
   e.classList.toggle('on',!!on);
 }
+function showGp(){ if(gpDismissed) return; const w=document.getElementById('gp-wrap'); if(w) w.style.display='flex'; }
+function hideGp(){ const w=document.getElementById('gp-wrap'); if(w) w.style.display='none'; }
+function dismissGamepad(){ gpDismissed=true; if(ws){ try{ws.close();}catch(e){} ws=null; } gpIndex=null; prev=null; hideGp(); }
+function scheduleHide(){ if(gpHideTimer) clearTimeout(gpHideTimer); gpHideTimer=setTimeout(()=>{ if(isGpConnected()) hideGp(); },5000); }
+function isGpConnected(){ return ws&&ws.readyState===1&&gpIndex!==null; }
 function refresh(){
+  if(gpDismissed) return;
   const open=ws&&ws.readyState===1;
-  if(gpIndex!==null&&open)setStatus('🎮 Connesso',true);
-  else if(open)setStatus('🎮 Premi un tasto del controller');
-  else setStatus('🎮 Connetti controller');
+  const closeBtn=document.getElementById('gp-close');
+  if(gpIndex!==null&&open){ setStatus('🎮 Connected',true); scheduleHide(); if(closeBtn) closeBtn.style.display='none'; }
+  else if(open){ setStatus('🎮 Press any button'); showGp(); if(gpHideTimer){clearTimeout(gpHideTimer);gpHideTimer=null;} if(closeBtn) closeBtn.style.display='flex'; }
+  else { setStatus('🎮 Connect controller'); showGp(); if(gpHideTimer){clearTimeout(gpHideTimer);gpHideTimer=null;} if(closeBtn) closeBtn.style.display='flex'; }
 }
+function stopAutoDetect(){ if(autoScanId){ cancelAnimationFrame(autoScanId); autoScanId=null; } }
 function connectGamepad(){
+  if(gpDismissed) return;
   if(ws&&(ws.readyState===0||ws.readyState===1))return;
   try{ws=new WebSocket('ws://'+location.host+'/ws/'+SLOT);}
-  catch(e){setStatus('🎮 Errore connessione');return;}
-  ws.onopen=()=>{refresh();poll();};
-  ws.onclose=()=>{ws=null;prev=null;refresh();};
+  catch(e){setStatus('🎮 Connection error');return;}
+  ws.onopen=()=>{refresh();stopAutoDetect();poll();};
+  ws.onclose=()=>{ws=null;gpIndex=null;prev=null;refresh();autoDetectGamepad();};
   ws.onerror=()=>{try{ws&&ws.close();}catch(e){}};
 }
-window.addEventListener('gamepadconnected',e=>{gpIndex=e.gamepad.index;refresh();});
+window.addEventListener('gamepadconnected',e=>{
+  gpIndex=e.gamepad.index;
+  if(!ws||ws.readyState!==1) connectGamepad();
+  refresh();
+});
 window.addEventListener('gamepaddisconnected',e=>{
   if(e.gamepad.index===gpIndex){gpIndex=null;prev=null;refresh();}
 });
@@ -153,6 +168,19 @@ function poll(){
   }
   requestAnimationFrame(poll);
 }
+function autoDetectGamepad(){
+  if(gpDismissed) return;
+  if(!ws||ws.readyState!==1){
+    const pads=navigator.getGamepads();
+    for(let i=0;i<pads.length;i++){
+      if(pads[i]){ gpIndex=i; connectGamepad(); break; }
+    }
+  }
+  autoScanId=requestAnimationFrame(autoDetectGamepad);
+}
+autoDetectGamepad();
+document.addEventListener('click',()=>{ if(gpDismissed) return; showGp(); if(isGpConnected()) scheduleHide(); });
+document.addEventListener('touchstart',()=>{ if(gpDismissed) return; showGp(); if(isGpConnected()) scheduleHide(); });
 "#;
 
 async fn stream_handler(
@@ -191,6 +219,7 @@ async fn viewer_handler(
 ) -> Response {
     let mode = state.sessions.lock().unwrap().get(&slot).map(|s| s.mode.clone());
     let slot_str = slot.to_string();
+    let rc = state.remote_controller.load(std::sync::atomic::Ordering::Relaxed);
 
     // Inject the gamepad fragments first so any `{slot}` they reference still
     // gets substituted by the next .replace() pass.
@@ -198,10 +227,15 @@ async fn viewer_handler(
         Some(m) if m.is_webrtc() => WEBRTC_VIEWER_HTML,
         _ => MJPEG_VIEWER_HTML,
     };
+    let (css, html_frag, js) = if rc {
+        (GAMEPAD_CSS, GAMEPAD_HTML, GAMEPAD_JS)
+    } else {
+        ("", "", "")
+    };
     let html = template
-        .replace("{gp_css}", GAMEPAD_CSS)
-        .replace("{gp_html}", GAMEPAD_HTML)
-        .replace("{gp_js}", GAMEPAD_JS)
+        .replace("{gp_css}", css)
+        .replace("{gp_html}", html_frag)
+        .replace("{gp_js}", js)
         .replace("{slot}", &slot_str)
         .replace("{webrtc_port}", &MEDIAMTX_WEBRTC_PORT.to_string());
     Html(html).into_response()

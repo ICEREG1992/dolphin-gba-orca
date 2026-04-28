@@ -20,19 +20,40 @@ GBA Orca finds the GBA windows automatically, captures each one with FFmpeg, and
 ## How to use it
 
 1. Download the installer from [Releases](https://github.com/regitkin/dolphin-gba-orca/releases).
-2. Start Dolphin and a game with controllers set to GBA (Integrated). Dolphin will open the GBA windows.
+2. Start Dolphin and a game with controllers set to **GBA (Integrated)**. Dolphin will open the GBA windows.
 3. Open GBA Orca — it lists every GBA window it sees.
 4. Click **Start stream** on each one you want to share.
 5. Send each player the stream URL shown in the app (something like `http://192.168.1.42:8080/v/1`).
 6. On the phone, the round button at the bottom-right rotates the video 90° for landscape play.
 
-7. You can select the streaming mode:
+You can select the streaming mode:
+
 - **MJPEG** — Best quality, but high latency  
 - **WebRTC** — Poor quality  
 - **WebRTC++** — Surprisingly good
 - **WebRTC VP9** — Second best quality, but CPU intensive and not widely supported
 
 The app rescans every 3 seconds, so closing or restarting Dolphin mid-session is fine — the list updates on its own.
+
+### Remote controller (MJPEG only)
+
+When starting a stream in **MJPEG** mode, you can enable **Remote controller** checkbox before clicking *Start stream*.
+This feature allows players to use a physical controller connected to their phone or tablet to control Dolphin running on the PC.
+
+**On the viewer (phone / tablet):**
+- The page auto-detects the gamepad as soon as you press any button. If auto-detect fails, tap **🎮 Connect controller**.
+- Once connected, the bar hides after a few seconds. Tap anywhere on the screen to bring it back.
+- Press **×** if you want to permanently hide the controller bar for this session (refresh the page to restore it).
+
+**On the PC (Dolphin setup):**
+GBA Orca converts the controller input received from the player’s device into local input events on the PC, so you must bind each slot to the correct keys in Dolphin.
+
+1. In Dolphin, go to **Controllers → GBA (Integrated)** and pick the slot you are streaming.
+2. Set the device to **Keyboard**. IMPORTANT!!
+3. Map each GBA button to a keyboard key by pressing the desired key on your controller.
+
+
+> **Note:** Remote controller currently requires **Windows**. The WebSocket endpoint is available on Linux but key injection is not yet implemented.
 
 
 ## Build from source
