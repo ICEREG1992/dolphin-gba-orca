@@ -42,8 +42,7 @@ This feature allows players to use a physical controller connected to their phon
 
 **On the viewer (phone / tablet):**
 - The page auto-detects the gamepad as soon as you press any button.
-- A toast notification cycles between **"Connect Controller"** and **"Press any button"** until the gamepad is detected.
-- Once connected, the notification shows **"Connected"** for 10 seconds and then disappears.
+- Once connected, the notification shows **"Connected"** for 4 seconds and then disappears.
 - If the controller disconnects, the notification reappears automatically.
 - Press **×** on the notification to permanently hide it for this session (refresh the page to restore it).
 
