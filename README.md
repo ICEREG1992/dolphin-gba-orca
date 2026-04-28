@@ -46,9 +46,9 @@ Before clicking **Start stream**, enable the **Controller over Stream** checkbox
 
 **On the viewer (phone / tablet):**
 - The page auto-detects the gamepad as soon as you press any button.
-- Once connected, the notification shows **"Connected"** for 4 seconds and then disappears.
+- Once connected, the notification shows **"Connected"**.
 - If the controller disconnects, the notification reappears automatically.
-- Press **×** on the notification to permanently hide it for this session (refresh the page to restore it).
+- Press **×** on the notification to permanently hide it (refresh the page to restore it).
 
 **On the PC (Dolphin setup):**
 GBA Orca converts the controller input received from the player’s device into local input events on the PC, so you must bind each slot to the correct keys in Dolphin.
