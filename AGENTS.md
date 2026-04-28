@@ -8,7 +8,7 @@ Compact guide for OpenCode sessions working in this repo.
 npm install              # install deps
 npm run tauri dev        # dev: Vite on :1420 + Tauri app (hot reload)
 npm run tauri build      # production NSIS installer
-npm run check            # svelte-check type-check (requires svelte-kit sync)
+npm run check            # svelte-kit sync + svelte-check against jsconfig.json
 npm run dev              # frontend only, no Tauri
 ```
 
@@ -18,8 +18,8 @@ Build outputs: frontend → `./build/`, Rust binary → `./src-tauri/target/rele
 
 **Tauri 2 + Rust backend, SvelteKit static SPA frontend.**
 
-- Frontend: `src/routes/+page.svelte` (single page, no routing). Bilingual IT/EN. Svelte 5 runes (`$:` used for reactivity).
-- Backend: `src-tauri/src/lib.rs` entry point; modules `stream`, `http`, `mediamtx`, `network`, `windows_api`, `x11_api`, `wayland_api`, `pipewire_capture`.
+- Frontend: `src/routes/+page.svelte` (single page, no routing). Bilingual IT/EN. Legacy `$:` reactive syntax; not Svelte 5 runes.
+- Backend: `src-tauri/src/lib.rs` entry point; modules `stream`, `http`, `mediamtx`, `network`, `input`, `windows_api`, `x11_api`, `wayland_api`, `pipewire_capture`.
 - HTTP server: Axum on `0.0.0.0:8080` (spawned in `setup` hook). Routes: `/stream/:slot` (MJPEG multipart), `/v/:slot` (viewer page), `/ws/:slot` (gamepad input WebSocket).
 - No SSR: `@sveltejs/adapter-static` with `fallback: "index.html"`, `ssr: false`.
 - Vite dev server: port `1420`, `strictPort: true`, ignores `**/src-tauri/**`.
@@ -73,3 +73,7 @@ MediaMTX config `mediamtx.yml` is a `resources` entry. **MediaMTX v1.18.0 takes 
 - **Lock order:** when both `sessions` and `mediamtx` locks are needed, always acquire `mediamtx` first, then `sessions`. Only the MediaMTX `Terminated` event handler does this; everywhere else only one lock is held at a time.
 - **CSP is intentionally `null`** in `tauri.conf.json` for development convenience.
 - `restore_window_silent()` uses `SW_SHOWNOACTIVATE` + `SetWindowPos(HWND_BOTTOM)` to unminimize GBA windows without stealing focus.
+
+## See also
+
+- `CLAUDE.md` — deeper architecture, data flows, and module docs.

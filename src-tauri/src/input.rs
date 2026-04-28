@@ -28,6 +28,8 @@ const GP_A: usize = 0;
 const GP_B: usize = 1;
 const GP_L1: usize = 4;
 const GP_R1: usize = 5;
+const GP_L2: usize = 6;
+const GP_R2: usize = 7;
 const GP_SELECT: usize = 8;
 const GP_START: usize = 9;
 const GP_DPAD_UP: usize = 12;
@@ -72,8 +74,8 @@ impl GamepadInput {
         let mut k = [false; GBA_KEYS];
         k[KEY_A] = btn(GP_A);
         k[KEY_B] = btn(GP_B);
-        k[KEY_L] = btn(GP_L1);
-        k[KEY_R] = btn(GP_R1);
+        k[KEY_L] = btn(GP_L1) || btn(GP_L2);
+        k[KEY_R] = btn(GP_R1) || btn(GP_R2);
         k[KEY_SELECT] = btn(GP_SELECT);
         k[KEY_START] = btn(GP_START);
         k[KEY_UP] = btn(GP_DPAD_UP) || ly < -STICK_DEADZONE;
@@ -89,8 +91,8 @@ impl GamepadInput {
 #[cfg(windows)]
 const SLOT_VK: [[u16; GBA_KEYS]; 5] = [
     [0; GBA_KEYS],
-    // Slot 1: Arrows + Z X C V Enter Backspace
-    [0x26, 0x28, 0x25, 0x27, 0x5A, 0x58, 0x43, 0x56, 0x0D, 0x08],
+    // Slot 1: Arrows + Z X C V B Backspace
+    [0x26, 0x28, 0x25, 0x27, 0x5A, 0x58, 0x43, 0x56, 0x42, 0x08],
     // Slot 2: WASD + E Q R T F G
     [0x57, 0x53, 0x41, 0x44, 0x45, 0x51, 0x52, 0x54, 0x46, 0x47],
     // Slot 3: IJKL + P O U Y H N
