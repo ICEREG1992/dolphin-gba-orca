@@ -37,8 +37,10 @@ The app rescans every 3 seconds, so closing or restarting Dolphin mid-session is
 
 ### Controller over Stream
 
-Before clicking **Start stream**, enable the **Controller over Stream** checkbox.  
+ 
 This feature allows players to use a physical controller connected to their phone or tablet to control Dolphin running on the PC. It works with **all streaming modes** (MJPEG and WebRTC).
+
+Before clicking **Start stream**, enable the **Controller over Stream** checkbox. 
 
 **On the viewer (phone / tablet):**
 - The page auto-detects the gamepad as soon as you press any button.
