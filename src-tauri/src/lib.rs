@@ -5,6 +5,7 @@ use tauri::Manager;
 
 mod error;
 mod http;
+mod input;
 mod mediamtx;
 mod network;
 mod stream;
