@@ -30,7 +30,7 @@ You can select the streaming mode:
 
 - **MJPEG** — Best quality, but high latency  
 - **WebRTC** — Poor quality  
-- **WebRTC++** — Surprisingly good
+- **WebRTC++** — Surprisingly good [Recommended]
 - **WebRTC VP9** — Second best quality, but CPU intensive and not widely supported
 
 The app rescans every 3 seconds, so closing or restarting Dolphin mid-session is fine — the list updates on its own.
