@@ -100,11 +100,13 @@ const GAMEPAD_HTML: &str =
 // port matches whatever served the viewer (8080 today).
 const GAMEPAD_JS: &str = r#"
 const SLOT={slot};
-let ws=null,gpIndex=null,prev=null;
+let ws=null,gpIndex=null;
+let prevBuf=null;
 let gpHideTimer=null;
 let gpCycleTimer=null;
 let gpDismissed=false;
-let autoScanId=null;
+let pollTimer=null;
+let detectTimer=null;
 const cycleTexts=['🎮 Connect Controller','🎮 Press any button'];
 let cycleIdx=0;
 function getToast(){ return document.getElementById('gp-toast'); }
@@ -119,7 +121,7 @@ function showToast(autoHide){
   if(!t) return;
   t.classList.add('visible');
   if(gpHideTimer){ clearTimeout(gpHideTimer); gpHideTimer=null; }
-  if(autoHide){ gpHideTimer=setTimeout(()=>{ hideToast(); },4000); }
+  if(autoHide){ gpHideTimer=setTimeout(()=>{ hideToast(); },3000); }
 }
 function hideToast(){
   const t=getToast();
@@ -135,7 +137,11 @@ function startCycle(){
   gpCycleTimer=setTimeout(startCycle,3000);
 }
 function stopCycle(){ if(gpCycleTimer){ clearTimeout(gpCycleTimer); gpCycleTimer=null; } }
-function dismissGamepad(){ gpDismissed=true; if(ws){ try{ws.close();}catch(e){} ws=null; } gpIndex=null; prev=null; stopCycle(); hideToast(); }
+function stopTimers(){
+  if(pollTimer){ clearTimeout(pollTimer); pollTimer=null; }
+  if(detectTimer){ clearTimeout(detectTimer); detectTimer=null; }
+}
+function dismissGamepad(){ gpDismissed=true; if(ws){ try{ws.close();}catch(e){} ws=null; } gpIndex=null; prevBuf=null; stopTimers(); stopCycle(); hideToast(); }
 function isGpConnected(){ return ws&&ws.readyState===1&&gpIndex!==null; }
 function refresh(){
   if(gpDismissed) return;
@@ -145,14 +151,13 @@ function refresh(){
   else if(open){ stopCycle(); if(t) t.classList.remove('connected'); setToastText('🎮 Press any button'); showToast(false); }
   else { if(t) t.classList.remove('connected'); startCycle(); }
 }
-function stopAutoDetect(){ if(autoScanId){ cancelAnimationFrame(autoScanId); autoScanId=null; } }
 function connectGamepad(){
   if(gpDismissed) return;
   if(ws&&(ws.readyState===0||ws.readyState===1))return;
   try{ws=new WebSocket('ws://'+location.host+'/ws/'+SLOT);}
   catch(e){return;}
-  ws.onopen=()=>{refresh();stopAutoDetect();poll();};
-  ws.onclose=()=>{ws=null;gpIndex=null;prev=null;refresh();autoDetectGamepad();};
+  ws.onopen=()=>{refresh();stopTimers();poll();};
+  ws.onclose=()=>{ws=null;gpIndex=null;prevBuf=null;refresh();autoDetectGamepad();};
   ws.onerror=()=>{try{ws&&ws.close();}catch(e){}};
 }
 window.addEventListener('gamepadconnected',e=>{
@@ -161,8 +166,9 @@ window.addEventListener('gamepadconnected',e=>{
   refresh();
 });
 window.addEventListener('gamepaddisconnected',e=>{
-  if(e.gamepad.index===gpIndex){gpIndex=null;prev=null;refresh();}
+  if(e.gamepad.index===gpIndex){gpIndex=null;prevBuf=null;refresh();}
 });
+function bufEqual(a,b){ if(!a||!b||a.length!==b.length) return false; for(let i=0;i<a.length;i++) if(a[i]!==b[i]) return false; return true; }
 function poll(){
   if(!ws||ws.readyState!==1)return;
   if(gpIndex===null){
@@ -171,13 +177,13 @@ function poll(){
   }
   const gp=gpIndex!==null?navigator.getGamepads()[gpIndex]:null;
   if(gp){
-    const payload=JSON.stringify({
-      axes:Array.from(gp.axes).slice(0,4).map(a=>Math.round(a*1000)/1000),
-      buttons:gp.buttons.map(b=>b.pressed?1:0)
-    });
-    if(payload!==prev){ws.send(payload);prev=payload;}
+    const buf=new Uint8Array(32);
+    const dv=new DataView(buf.buffer);
+    for(let i=0;i<4;i++){ dv.setFloat32(i*4,gp.axes[i]||0,true); }
+    for(let i=0;i<16;i++){ buf[16+i]=gp.buttons[i]&&gp.buttons[i].pressed?1:0; }
+    if(!bufEqual(buf,prevBuf)){ ws.send(buf); prevBuf=buf; }
   }
-  requestAnimationFrame(poll);
+  pollTimer=setTimeout(poll,8);
 }
 function autoDetectGamepad(){
   if(gpDismissed) return;
@@ -187,7 +193,7 @@ function autoDetectGamepad(){
       if(pads[i]){ gpIndex=i; connectGamepad(); break; }
     }
   }
-  autoScanId=requestAnimationFrame(autoDetectGamepad);
+  detectTimer=setTimeout(autoDetectGamepad,8);
 }
 autoDetectGamepad();
 startCycle();
@@ -272,10 +278,13 @@ async fn handle_ws(mut socket: WebSocket, slot: u8) {
             }
         };
         match msg {
-            Message::Text(text) => match serde_json::from_str::<GamepadInput>(&text) {
-                Ok(input) => state.apply(&input),
-                Err(e) => tracing::debug!("[ws slot {}] bad json: {}", slot, e),
-            },
+            Message::Binary(data) => {
+                if let Some(input) = GamepadInput::from_bytes(&data) {
+                    state.apply(&input);
+                } else {
+                    tracing::debug!("[ws slot {}] bad binary payload (len={})", slot, data.len());
+                }
+            }
             Message::Close(_) => break,
             _ => {}
         }

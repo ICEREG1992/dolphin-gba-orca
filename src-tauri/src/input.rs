@@ -50,6 +50,18 @@ pub struct GamepadInput {
 }
 
 impl GamepadInput {
+    /// Parse compact binary payload: 4×f32 LE axes + 16×u8 buttons = 32 bytes.
+    pub fn from_bytes(data: &[u8]) -> Option<Self> {
+        if data.len() < 32 { return None; }
+        let mut axes = Vec::with_capacity(4);
+        for i in 0..4 {
+            let b = &data[i * 4..i * 4 + 4];
+            axes.push(f32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+        }
+        let buttons = data[16..32].to_vec();
+        Some(Self { axes, buttons })
+    }
+
     fn to_gba_keys(&self) -> [bool; GBA_KEYS] {
         let btn = |i: usize| self.buttons.get(i).copied().unwrap_or(0) != 0;
         let axis = |i: usize| self.axes.get(i).copied().unwrap_or(0.0);
