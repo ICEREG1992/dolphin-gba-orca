@@ -1,4 +1,4 @@
-# AGENTS.md
+# AGENTS.md test
 
 Compact guide for OpenCode sessions working in this repo.
 
