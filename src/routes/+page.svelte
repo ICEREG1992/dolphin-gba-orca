@@ -110,9 +110,6 @@
 
   /** @param {number} slot @param {string} mode */
   function streamViewUrl(slot, mode) {
-    if (mode === "Webrtc" || mode === "WebrtcPlus" || mode === "WebrtcVp9") {
-      return `http://${selectedIp || "..."}:${server.webrtc_port}/slot${slot}`;
-    }
     return `${serverUrl}/v/${slot}`;
   }
 
@@ -316,12 +313,10 @@
         <option value="webrtc-vp9">{t.webrtcVp9}</option>
       </select>
     </label>
-    {#if streamMode === 'mjpeg'}
-      <label class="chk">
-        <input type="checkbox" bind:checked={controllerOverStream} on:change={toggleControllerOverStream} />
-        {t.controllerOverStream}
-      </label>
-    {/if}
+    <label class="chk">
+      <input type="checkbox" bind:checked={controllerOverStream} on:change={toggleControllerOverStream} />
+      {t.controllerOverStream}
+    </label>
     <span class="sep"></span>
     {#if isWayland}
       <span class="info">{t.waylandTitle}</span>

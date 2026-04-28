@@ -71,7 +71,7 @@ const WEBRTC_VIEWER_HTML: &str = r#"<!DOCTYPE html>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 html,body{width:100%;height:100%;background:#000;overflow:hidden}
-iframe{width:100%;height:100%;border:none}
+iframe{width:100%;height:100%;border:none;z-index:1;position:relative}
 {gp_css}
 </style>
 </head><body>
@@ -84,26 +84,15 @@ document.getElementById('player').src = 'http://' + window.location.hostname + '
 </body></html>"#;
 
 const GAMEPAD_CSS: &str = r#"
-.gp-wrap{position:fixed;top:12px;right:12px;display:flex;gap:6px;align-items:center;z-index:10}
-.gp-btn{
-  padding:10px 18px;
-  border:none;
-  border-radius:22px;
-  background:rgba(0,120,215,0.92);
-  color:#fff;
-  font:600 15px system-ui,sans-serif;
-  cursor:pointer;
-  -webkit-tap-highlight-color:transparent;
-  backdrop-filter:blur(6px);
-  box-shadow:0 3px 10px rgba(0,0,0,0.4);
-}
-.gp-btn:active{background:rgba(0,100,190,0.98)}
-.gp-btn.on{background:rgba(60,200,90,0.95)}
-.gp-close{width:34px;height:34px;padding:0;display:flex;align-items:center;justify-content:center;border-radius:50%;font-size:18px;line-height:1;background:rgba(0,120,215,0.92)}
+.gp-toast{position:fixed;top:12px;right:12px;display:flex;align-items:center;gap:8px;z-index:99999;padding:10px 16px;border-radius:4px;background:rgba(0,120,215,0.92);color:#fff;font:600 15px system-ui,sans-serif;box-shadow:0 3px 10px rgba(0,0,0,0.4);backdrop-filter:blur(6px);transform:translateX(120%) translateZ(0);opacity:0;transition:transform .3s ease,opacity .3s ease;will-change:transform}
+.gp-toast.visible{transform:translateX(0) translateZ(0);opacity:1}
+.gp-toast.connected{background:rgba(60,200,90,0.95)}
+.gp-close{width:30px;height:30px;padding:0;display:flex;align-items:center;justify-content:center;border:none;border-radius:4px;background:rgba(255,255,255,0.2);color:#ff0000;font-size:20px;line-height:1;cursor:pointer;-webkit-tap-highlight-color:transparent;font-weight:700}
+.gp-close:active{background:rgba(255,255,255,0.35)}
 "#;
 
 const GAMEPAD_HTML: &str =
-    r#"<div id="gp-wrap" class="gp-wrap"><button id="gp-status" class="gp-btn" onclick="connectGamepad()">🎮 Connetti controller</button><button id="gp-close" class="gp-btn gp-close" onclick="dismissGamepad()" title="Chiudi">×</button></div>"#;
+    r#"<div id="gp-toast" class="gp-toast"><span id="gp-text">🎮 Connect Controller</span><button class="gp-close" onclick="dismissGamepad()" title="Close">×</button></div>"#;
 
 // Tiny client: open WS once user taps the button, find a gamepad (browsers
 // only expose one after a button press on the page), poll at rAF rate, send
@@ -113,33 +102,55 @@ const GAMEPAD_JS: &str = r#"
 const SLOT={slot};
 let ws=null,gpIndex=null,prev=null;
 let gpHideTimer=null;
+let gpCycleTimer=null;
 let gpDismissed=false;
 let autoScanId=null;
-function setStatus(t,on){
-  const e=document.getElementById('gp-status');
-  if(!e)return;
-  e.textContent=t;
-  e.classList.toggle('on',!!on);
+const cycleTexts=['🎮 Connect Controller','🎮 Press any button'];
+let cycleIdx=0;
+function getToast(){ return document.getElementById('gp-toast'); }
+function getText(){ return document.getElementById('gp-text'); }
+function setToastText(text){
+  const span=getText();
+  if(span) span.textContent=text;
 }
-function showGp(){ if(gpDismissed) return; const w=document.getElementById('gp-wrap'); if(w) w.style.display='flex'; }
-function hideGp(){ const w=document.getElementById('gp-wrap'); if(w) w.style.display='none'; }
-function dismissGamepad(){ gpDismissed=true; if(ws){ try{ws.close();}catch(e){} ws=null; } gpIndex=null; prev=null; hideGp(); }
-function scheduleHide(){ if(gpHideTimer) clearTimeout(gpHideTimer); gpHideTimer=setTimeout(()=>{ if(isGpConnected()) hideGp(); },5000); }
+function showToast(autoHide){
+  if(gpDismissed) return;
+  const t=getToast();
+  if(!t) return;
+  t.classList.add('visible');
+  if(gpHideTimer){ clearTimeout(gpHideTimer); gpHideTimer=null; }
+  if(autoHide){ gpHideTimer=setTimeout(()=>{ hideToast(); },4000); }
+}
+function hideToast(){
+  const t=getToast();
+  if(t){ t.classList.remove('visible'); t.classList.remove('connected'); }
+  if(gpHideTimer){ clearTimeout(gpHideTimer); gpHideTimer=null; }
+}
+function startCycle(){
+  if(gpDismissed) return;
+  if(gpCycleTimer){ clearTimeout(gpCycleTimer); }
+  setToastText(cycleTexts[cycleIdx]);
+  cycleIdx=(cycleIdx+1)%cycleTexts.length;
+  showToast(false);
+  gpCycleTimer=setTimeout(startCycle,3000);
+}
+function stopCycle(){ if(gpCycleTimer){ clearTimeout(gpCycleTimer); gpCycleTimer=null; } }
+function dismissGamepad(){ gpDismissed=true; if(ws){ try{ws.close();}catch(e){} ws=null; } gpIndex=null; prev=null; stopCycle(); hideToast(); }
 function isGpConnected(){ return ws&&ws.readyState===1&&gpIndex!==null; }
 function refresh(){
   if(gpDismissed) return;
+  const t=getToast();
   const open=ws&&ws.readyState===1;
-  const closeBtn=document.getElementById('gp-close');
-  if(gpIndex!==null&&open){ setStatus('🎮 Connected',true); scheduleHide(); if(closeBtn) closeBtn.style.display='none'; }
-  else if(open){ setStatus('🎮 Press any button'); showGp(); if(gpHideTimer){clearTimeout(gpHideTimer);gpHideTimer=null;} if(closeBtn) closeBtn.style.display='flex'; }
-  else { setStatus('🎮 Connect controller'); showGp(); if(gpHideTimer){clearTimeout(gpHideTimer);gpHideTimer=null;} if(closeBtn) closeBtn.style.display='flex'; }
+  if(gpIndex!==null&&open){ stopCycle(); if(t) t.classList.add('connected'); setToastText('🎮 Connected'); showToast(true); }
+  else if(open){ stopCycle(); if(t) t.classList.remove('connected'); setToastText('🎮 Press any button'); showToast(false); }
+  else { if(t) t.classList.remove('connected'); startCycle(); }
 }
 function stopAutoDetect(){ if(autoScanId){ cancelAnimationFrame(autoScanId); autoScanId=null; } }
 function connectGamepad(){
   if(gpDismissed) return;
   if(ws&&(ws.readyState===0||ws.readyState===1))return;
   try{ws=new WebSocket('ws://'+location.host+'/ws/'+SLOT);}
-  catch(e){setStatus('🎮 Connection error');return;}
+  catch(e){return;}
   ws.onopen=()=>{refresh();stopAutoDetect();poll();};
   ws.onclose=()=>{ws=null;gpIndex=null;prev=null;refresh();autoDetectGamepad();};
   ws.onerror=()=>{try{ws&&ws.close();}catch(e){}};
@@ -179,8 +190,7 @@ function autoDetectGamepad(){
   autoScanId=requestAnimationFrame(autoDetectGamepad);
 }
 autoDetectGamepad();
-document.addEventListener('click',()=>{ if(gpDismissed) return; showGp(); if(isGpConnected()) scheduleHide(); });
-document.addEventListener('touchstart',()=>{ if(gpDismissed) return; showGp(); if(isGpConnected()) scheduleHide(); });
+startCycle();
 "#;
 
 async fn stream_handler(

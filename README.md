@@ -35,15 +35,17 @@ You can select the streaming mode:
 
 The app rescans every 3 seconds, so closing or restarting Dolphin mid-session is fine — the list updates on its own.
 
-### Controller over Stream (MJPEG only)
+### Controller over Stream
 
-When starting a stream in **MJPEG** mode, you can enable **Controller over Stream** checkbox before clicking *Start stream*.
-This feature allows players to use a physical controller connected to their phone or tablet to control Dolphin running on the PC.
+Before clicking **Start stream**, enable the **Controller over Stream** checkbox.  
+This feature allows players to use a physical controller connected to their phone or tablet to control Dolphin running on the PC. It works with **all streaming modes** (MJPEG and WebRTC).
 
 **On the viewer (phone / tablet):**
-- The page auto-detects the gamepad as soon as you press any button. If auto-detect fails, tap **🎮 Connect controller**.
-- Once connected, the bar hides after a few seconds. Tap anywhere on the screen to bring it back.
-- Press **×** if you want to permanently hide the controller bar for this session (refresh the page to restore it).
+- The page auto-detects the gamepad as soon as you press any button.
+- A toast notification cycles between **"Connect Controller"** and **"Press any button"** until the gamepad is detected.
+- Once connected, the notification shows **"Connected"** for 10 seconds and then disappears.
+- If the controller disconnects, the notification reappears automatically.
+- Press **×** on the notification to permanently hide it for this session (refresh the page to restore it).
 
 **On the PC (Dolphin setup):**
 GBA Orca converts the controller input received from the player’s device into local input events on the PC, so you must bind each slot to the correct keys in Dolphin.
