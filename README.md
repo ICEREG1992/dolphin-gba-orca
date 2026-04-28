@@ -35,9 +35,9 @@ You can select the streaming mode:
 
 The app rescans every 3 seconds, so closing or restarting Dolphin mid-session is fine — the list updates on its own.
 
-### Remote controller (MJPEG only)
+### Controller over Stream (MJPEG only)
 
-When starting a stream in **MJPEG** mode, you can enable **Remote controller** checkbox before clicking *Start stream*.
+When starting a stream in **MJPEG** mode, you can enable **Controller over Stream** checkbox before clicking *Start stream*.
 This feature allows players to use a physical controller connected to their phone or tablet to control Dolphin running on the PC.
 
 **On the viewer (phone / tablet):**
@@ -53,7 +53,7 @@ GBA Orca converts the controller input received from the player’s device into 
 3. Map each GBA button to a keyboard key by pressing the desired key on your controller.
 
 
-> **Note:** Remote controller currently requires **Windows**. The WebSocket endpoint is available on Linux but key injection is not yet implemented.
+> **Note:** Controller over Stream currently requires **Windows**. The WebSocket endpoint is available on Linux but key injection is not yet implemented.
 
 
 ## Build from source

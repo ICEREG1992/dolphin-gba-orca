@@ -10,7 +10,7 @@
       gbaOnly: "Solo finestre GBA",
       autoScan: "Auto-scan: 3s",
       server: "Server:",
-      remoteController: "Controller da remoto",
+      controllerOverStream: "Controller over Stream",
       clickToCopy: "Click per copiare",
       slot: "Slot",
       windowTitle: "Titolo finestra",
@@ -45,7 +45,7 @@
       gbaOnly: "GBA windows only",
       autoScan: "Auto-scan: 3s",
       server: "Server:",
-      remoteController: "Remote controller",
+      controllerOverStream: "Controller over Stream",
       clickToCopy: "Click to copy",
       slot: "Slot",
       windowTitle: "Window title",
@@ -97,7 +97,7 @@
   let error = "";
   let autoScanInterval = null;
   let streamMode = "mjpeg";
-  let remoteController = false;
+  let controllerOverStream = false;
 
   // Wayland-specific state. On Wayland we cannot enumerate windows: the user
   // must pick them via xdg-desktop-portal, then assign each captured PipeWire
@@ -199,9 +199,9 @@
     }
   }
 
-  async function toggleRemoteController() {
+  async function toggleControllerOverStream() {
     try {
-      await invoke("set_remote_controller", { enabled: remoteController });
+      await invoke("set_remote_controller", { enabled: controllerOverStream });
     } catch (e) {
       console.error("set_remote_controller:", e);
     }
@@ -251,9 +251,9 @@
   onMount(async () => {
     await loadServerInfo();
     try {
-      remoteController = await invoke("get_remote_controller");
+      controllerOverStream = await invoke("get_remote_controller");
     } catch (e) {
-      remoteController = false;
+      controllerOverStream = false;
     }
     try {
       isWayland = await invoke("is_wayland");
@@ -318,8 +318,8 @@
     </label>
     {#if streamMode === 'mjpeg'}
       <label class="chk">
-        <input type="checkbox" bind:checked={remoteController} on:change={toggleRemoteController} />
-        {t.remoteController}
+        <input type="checkbox" bind:checked={controllerOverStream} on:change={toggleControllerOverStream} />
+        {t.controllerOverStream}
       </label>
     {/if}
     <span class="sep"></span>
