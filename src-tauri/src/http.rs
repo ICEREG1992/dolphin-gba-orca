@@ -199,6 +199,294 @@ autoDetectGamepad();
 startCycle();
 "#;
 
+const VIRTUAL_CSS: &str =
+    r#"
+#virtual-controller {
+  position: fixed;
+  left: 20px;
+  right: 20px;
+  bottom: 20px;
+  height: 220px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  pointer-events: none;
+  z-index: 10000;
+}
+
+#virtual-controller .vc-btn {
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  font-family: sans-serif;
+  font-weight: 700;
+  border: 2px solid rgba(255,255,255,0.45);
+  background: rgba(30,30,30,0.75);
+  color: white;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+}
+
+#virtual-controller .vc-btn:active,
+#virtual-controller .vc-btn.pressed {
+  background: rgba(100,100,100,0.9);
+  transform: scale(0.94);
+}
+
+#virtual-controller .vc-shoulders {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+#virtual-controller .vc-l,
+#virtual-controller .vc-r {
+  width: 64px;
+  height: 38px;
+  border-radius: 10px;
+}
+
+#virtual-controller .vc-main {
+  width: 100%;
+  max-width: 500px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+#virtual-controller .vc-dpad {
+  position: relative;
+  width: 120px;
+  height: 120px;
+}
+
+#virtual-controller .vc-dpad .vc-btn {
+  position: absolute;
+  width: 40px;
+  height: 40px;
+  border-radius: 6px;
+}
+
+#virtual-controller .vc-up {
+  left: 40px;
+  top: 0;
+}
+
+#virtual-controller .vc-down {
+  left: 40px;
+  bottom: 0;
+}
+
+#virtual-controller .vc-left {
+  left: 0;
+  top: 40px;
+}
+
+#virtual-controller .vc-right {
+  right: 0;
+  top: 40px;
+}
+
+#virtual-controller .vc-center {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+#virtual-controller .vc-select,
+#virtual-controller .vc-start {
+  width: 62px;
+  height: 28px;
+  border-radius: 14px;
+  font-size: 9px;
+}
+
+#virtual-controller .vc-face {
+  position: relative;
+  width: 120px;
+  height: 120px;
+}
+
+#virtual-controller .vc-face .vc-btn {
+  position: absolute;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  font-size: 18px;
+}
+
+#virtual-controller .vc-a {
+  right: 0;
+  top: 18px;
+}
+
+#virtual-controller .vc-b {
+  left: 0;
+  bottom: 18px;
+}
+"#;
+
+const VIRTUAL_HTML: &str =
+    r#"
+<div id="virtual-controller">
+  <div class="vc-shoulders">
+    <button class="vc-btn vc-l" data-button="l">L</button>
+    <button class="vc-btn vc-r" data-button="r">R</button>
+  </div>
+
+  <div class="vc-main">
+    <div class="vc-dpad">
+      <button class="vc-btn vc-up" data-button="up">▲</button>
+      <button class="vc-btn vc-left" data-button="left">◀</button>
+      <button class="vc-btn vc-right" data-button="right">▶</button>
+      <button class="vc-btn vc-down" data-button="down">▼</button>
+    </div>
+
+    <div class="vc-center">
+      <button class="vc-btn vc-select" data-button="select">SELECT</button>
+      <button class="vc-btn vc-start" data-button="start">START</button>
+    </div>
+
+    <div class="vc-face">
+      <button class="vc-btn vc-b" data-button="b">B</button>
+      <button class="vc-btn vc-a" data-button="a">A</button>
+    </div>
+  </div>
+</div>
+"#;
+
+const VIRTUAL_JS: &str =
+    r#"
+const SLOT={slot};
+
+let ws=null;
+let prevBuf=null;
+
+const buttonIndices={
+  a:      0,
+  b:      1,
+  l:      4,
+  r:      5,
+  select: 8,
+  start:  9,
+  up:     12,
+  down:   13,
+  left:   14,
+  right:  15
+};
+
+function connectVirtualController(){
+  if(ws&&(ws.readyState===0||ws.readyState===1)) return;
+
+  try{
+    ws=new WebSocket('ws://'+location.host+'/ws/'+SLOT);
+  }catch(e){
+    ws=null;
+    return;
+  }
+
+  ws.onopen=()=>{
+    prevBuf=null;
+    sendState();
+  };
+
+  ws.onclose=()=>{
+    ws=null;
+    prevBuf=null;
+  };
+
+  ws.onerror=()=>{
+    try{
+      if(ws) ws.close();
+    }catch(e){}
+  };
+}
+
+function bufEqual(a,b){
+  if(!a||!b||a.length!==b.length) return false;
+  for(let i=0;i<a.length;i++){
+    if(a[i]!==b[i]) return false;
+  }
+  return true;
+}
+
+function sendState(){
+  if(!ws||ws.readyState!==1) return;
+
+  const buf=new Uint8Array(32);
+
+  // Axes remain zero for the virtual controller.
+  // Buttons occupy bytes 16..31, matching Web Gamepad API indices.
+  
+  if(!bufEqual(buf,prevBuf)){
+    ws.send(buf);
+    prevBuf=buf;
+  }
+}
+
+function setButton(name,pressed){
+  if(!ws||ws.readyState!==1) return;
+
+  const index=buttonIndices[name];
+  if(index===undefined) return;
+
+  // Web Gamepad buttons begin at byte 16.
+  const buf=prevBuf
+    ? new Uint8Array(prevBuf)
+    : new Uint8Array(32);
+
+  buf[16+index]=pressed?1:0;
+
+  if(!bufEqual(buf,prevBuf)){
+    ws.send(buf);
+    prevBuf=buf;
+  }
+}
+
+function bindButton(button){
+  const name=button.dataset.button;
+  if(!name) return;
+
+  const press=e=>{
+    e.preventDefault();
+
+    if(!ws||ws.readyState!==1){
+      connectVirtualController();
+      return;
+    }
+
+    button.classList.add('pressed');
+    setButton(name,true);
+  };
+
+  const release=e=>{
+    e.preventDefault();
+
+    button.classList.remove('pressed');
+
+    if(ws&&ws.readyState===1){
+      setButton(name,false);
+    }
+  };
+
+  button.addEventListener('pointerdown',press);
+  button.addEventListener('pointerup',release);
+  button.addEventListener('pointercancel',release);
+  button.addEventListener('pointerleave',release);
+
+  button.addEventListener('contextmenu',e=>e.preventDefault());
+}
+
+document
+  .querySelectorAll('#virtual-controller [data-button]')
+  .forEach(bindButton);
+
+connectVirtualController();
+"#;
+
 async fn stream_handler(
     Path(slot): Path<u8>,
     AxumState(state): AxumState<SharedState>,
@@ -245,7 +533,7 @@ async fn viewer_handler(
     let (css, html_frag, js) = if rc == 1 {
         (GAMEPAD_CSS, GAMEPAD_HTML, GAMEPAD_JS)
     } else if rc == 2 {
-        ("", "", "")
+        (VIRTUAL_CSS, VIRTUAL_HTML, VIRTUAL_JS)
     } else {
         ("", "", "")
     };
