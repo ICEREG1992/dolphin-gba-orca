@@ -69,7 +69,7 @@ cd dolphin-gba-orca
 npm install
 ```
 
-Then:
+Install Rust with [rustup](https://rustup.rs/), then:
 
 ```bash
 npm run tauri dev      # development

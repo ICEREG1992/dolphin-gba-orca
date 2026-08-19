@@ -9,8 +9,9 @@
       scanning: "Scansione...",
       gbaOnly: "Solo finestre GBA",
       autoScan: "Auto-scan: 3s",
-      server: "Server:",
+      server: "Server",
       controllerOverStream: "Controller over Stream",
+      controller: "Controller",
       clickToCopy: "Click per copiare",
       slot: "Slot",
       windowTitle: "Titolo finestra",
@@ -44,8 +45,12 @@
       scanning: "Scanning...",
       gbaOnly: "GBA windows only",
       autoScan: "Auto-scan: 3s",
-      server: "Server:",
+      server: "Server",
       controllerOverStream: "Controller over Stream",
+      controller: "Controller",
+      controllerUsb: "USB",
+      controllerNone: "None",
+      controllerVirtual: "Virtual",
       clickToCopy: "Click to copy",
       slot: "Slot",
       windowTitle: "Window title",
@@ -97,6 +102,7 @@
   let error = "";
   let autoScanInterval = null;
   let streamMode = "mjpeg";
+  let controllerMode = "none";
   let controllerOverStream = false;
 
   // Wayland-specific state. On Wayland we cannot enumerate windows: the user
@@ -314,8 +320,12 @@
       </select>
     </label>
     <label class="chk">
-      <input type="checkbox" bind:checked={controllerOverStream} on:change={toggleControllerOverStream} />
-      {t.controllerOverStream}
+    {t.controller}:
+      <select bind:value={controllerMode}>
+        <option value="none">{t.controllerNone}</option>
+        <option value="usb">{t.controllerUsb}</option>
+        <option value="virtual">{t.controllerVirtual}</option>
+      </select>
     </label>
     <span class="sep"></span>
     {#if isWayland}
@@ -334,7 +344,7 @@
   </div>
 
   <div class="server-row">
-    <label>{t.server}</label>
+    <label>{t.server}:</label>
     {#if server.interfaces.length > 1}
       <select bind:value={selectedIp}>
         {#each server.interfaces as iface}
