@@ -236,15 +236,16 @@ async fn viewer_handler(
     let mode = state.sessions.lock().unwrap().get(&slot).map(|s| s.mode.clone());
     let slot_str = slot.to_string();
     let rc = state.remote_controller.load(std::sync::atomic::Ordering::Relaxed);
-
     // Inject the gamepad fragments first so any `{slot}` they reference still
     // gets substituted by the next .replace() pass.
     let template = match mode {
         Some(m) if m.is_webrtc() => WEBRTC_VIEWER_HTML,
         _ => MJPEG_VIEWER_HTML,
     };
-    let (css, html_frag, js) = if rc {
+    let (css, html_frag, js) = if rc == 1 {
         (GAMEPAD_CSS, GAMEPAD_HTML, GAMEPAD_JS)
+    } else if rc == 2 {
+        ("", "", "")
     } else {
         ("", "", "")
     };

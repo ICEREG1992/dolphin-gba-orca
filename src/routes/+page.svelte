@@ -10,7 +10,6 @@
       gbaOnly: "Solo finestre GBA",
       autoScan: "Auto-scan: 3s",
       server: "Server",
-      controllerOverStream: "Controller over Stream",
       controller: "Controller",
       clickToCopy: "Click per copiare",
       slot: "Slot",
@@ -46,7 +45,6 @@
       gbaOnly: "GBA windows only",
       autoScan: "Auto-scan: 3s",
       server: "Server",
-      controllerOverStream: "Controller over Stream",
       controller: "Controller",
       controllerUsb: "USB",
       controllerNone: "None",
@@ -101,9 +99,8 @@
   let loading = false;
   let error = "";
   let autoScanInterval = null;
-  let streamMode = "mjpeg";
-  let controllerMode = "none";
-  let controllerOverStream = false;
+  let streamMode = "WebrtcPlus";
+  let controller = 0;
 
   // Wayland-specific state. On Wayland we cannot enumerate windows: the user
   // must pick them via xdg-desktop-portal, then assign each captured PipeWire
@@ -202,9 +199,9 @@
     }
   }
 
-  async function toggleControllerOverStream() {
+  async function selectController() {
     try {
-      await invoke("set_remote_controller", { enabled: controllerOverStream });
+      await invoke("set_remote_controller", { controller });
     } catch (e) {
       console.error("set_remote_controller:", e);
     }
@@ -254,9 +251,9 @@
   onMount(async () => {
     await loadServerInfo();
     try {
-      controllerOverStream = await invoke("get_remote_controller");
+      controller = await invoke("get_remote_controller");
     } catch (e) {
-      controllerOverStream = false;
+      controller = 0;
     }
     try {
       isWayland = await invoke("is_wayland");
@@ -280,9 +277,6 @@
 </script>
 
 <div class="app">
-  <div class="titlebar">
-    GBA Orca
-  </div>
 
   {#if isWayland}
     <div class="wayland-banner">
@@ -294,6 +288,20 @@
       <span class="wayland-slot">GBA4</span>
     </div>
   {/if}
+
+  <div class="server-row">
+    <label>{t.server}:</label>
+    {#if server.interfaces.length > 1}
+      <select bind:value={selectedIp}>
+        {#each server.interfaces as iface}
+          <option value={iface.ip}>{iface.ip} — {iface.name}</option>
+        {/each}
+      </select>
+    {/if}
+    <code on:click={() => copyToClipboard(serverUrl)} title={t.clickToCopy}>
+      {serverUrl}
+    </code>
+  </div>
 
   <div class="toolbar">
     {#if isWayland}
@@ -313,18 +321,18 @@
     <label class="chk">
       {t.mode}:
       <select bind:value={streamMode}>
-        <option value="mjpeg">{t.mjpeg}</option>
-        <option value="webrtc">{t.webrtc}</option>
-        <option value="webrtc++">{t.webrtcPlus}</option>
-        <option value="webrtc-vp9">{t.webrtcVp9}</option>
+        <option value="WebrtcPlus">{t.webrtcPlus}</option>
+        <option value="Webrtc">{t.webrtc}</option>
+        <option value="MJPEG">{t.mjpeg}</option>
+        <option value="WebrtcVp9">{t.webrtcVp9}</option>
       </select>
     </label>
     <label class="chk">
     {t.controller}:
-      <select bind:value={controllerMode}>
-        <option value="none">{t.controllerNone}</option>
-        <option value="usb">{t.controllerUsb}</option>
-        <option value="virtual">{t.controllerVirtual}</option>
+      <select bind:value={controller} on:change={selectController}>
+        <option value={0}>{t.controllerNone}</option>
+        <option value={1}>{t.controllerUsb}</option>
+        <option value={2}>{t.controllerVirtual}</option>
       </select>
     </label>
     <span class="sep"></span>
@@ -341,20 +349,6 @@
         <option value="en">English</option>
       </select>
     </label>
-  </div>
-
-  <div class="server-row">
-    <label>{t.server}:</label>
-    {#if server.interfaces.length > 1}
-      <select bind:value={selectedIp}>
-        {#each server.interfaces as iface}
-          <option value={iface.ip}>{iface.ip} — {iface.name}</option>
-        {/each}
-      </select>
-    {/if}
-    <code on:click={() => copyToClipboard(serverUrl)} title={t.clickToCopy}>
-      {serverUrl}
-    </code>
   </div>
 
   {#if error}
@@ -499,14 +493,6 @@
     height: 100vh;
   }
 
-  .titlebar {
-    background: #fff;
-    border-bottom: 1px solid #e0e0e0;
-    padding: 6px 10px;
-    font-weight: 600;
-    font-size: 13px;
-  }
-
   .toolbar {
     background: #fff;
     border-bottom: 1px solid #e0e0e0;
@@ -566,6 +552,13 @@
     border: 1px solid #ccc;
     padding: 2px 6px;
     cursor: pointer;
+    height: 24px;
+    box-sizing: border-box;
+  }
+
+  .server-row code {
+    display: inline-flex;
+    align-items: center;
   }
 
   .server-row code:hover,
