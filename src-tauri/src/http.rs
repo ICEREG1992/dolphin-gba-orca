@@ -21,7 +21,7 @@ const MJPEG_VIEWER_HTML: &str = r#"<!DOCTYPE html>
 <meta name="apple-mobile-web-app-capable" content="yes">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-html,body{width:100%;height:100%;background:#000;overflow:hidden}
+html,body{width:100%;height:100%;background:rgb(30, 30, 30);overflow:hidden}
 .wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center}
 img{
   width:100%;
@@ -70,8 +70,8 @@ const WEBRTC_VIEWER_HTML: &str = r#"<!DOCTYPE html>
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-html,body{width:100%;height:100%;background:#000;overflow:hidden}
-iframe{width:100%;height:100%;border:none;z-index:1;position:relative;pointer-events:none;}
+html,body{width:100%;height:100%;background:rgb(30, 30, 30);overflow:hidden}
+iframe{width:100%;height:66%;border:none;z-index:1;position:relative;pointer-events:none;}
 {gp_css}
 </style>
 </head><body>
@@ -250,8 +250,7 @@ const VIRTUAL_CSS: &str =
 }
 
 #virtual-controller .vc-main {
-  width: 100%;
-  max-width: 500px;
+  width: 90%;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -261,6 +260,13 @@ const VIRTUAL_CSS: &str =
   position: relative;
   width: 120px;
   height: 120px;
+  /* Hit-area divs (see .vc-hit below) extend past the visible 40x40 arrow
+     buttons to cover the whole 120x120 box with no dead zone.
+     #virtual-controller above has pointer-events:none, so without this the
+     enlarged areas outside the actual button elements couldn't receive
+     pointer/touch events at all. */
+  pointer-events: auto;
+  touch-action: none;
 }
 
 #virtual-controller .vc-dpad .vc-btn {
@@ -268,6 +274,81 @@ const VIRTUAL_CSS: &str =
   width: 40px;
   height: 40px;
   border-radius: 6px;
+  /* The hit-area divs (.vc-hit) sit underneath and do the actual pointer
+     handling for the d-pad, so the arrow buttons don't need to catch
+     events themselves — pointer-events:none excludes them from
+     hit-testing entirely (elementFromPoint sees straight through them),
+     so the higher z-index here is purely so they still *paint* on top
+     and look unchanged, rather than getting visually covered by the
+     .vc-hit debug overlays. */
+  pointer-events: none;
+  z-index: 3;
+}
+
+/* Real, positioned elements for each d-pad hit region — built this way
+   (rather than computed in JS) so the boundaries can be seen directly in
+   devtools, or visually by uncommenting the `background`/`border` below.
+   Layout:
+     - up/down: full width, top/bottom 40px band (original 40px height,
+       extended 40px to either side)
+     - left/right: middle 40px band, split into the original 40x40 square
+       plus a 20x120 vertical bar reaching full height — together a
+       "sideways T". Where a bar overlaps the up/down bands, up/down wins
+       (higher z-index) since that's the arrow's own visual footprint;
+       flip the z-index below to give the bar priority instead.
+   All six are transparent to touch outside .vc-dpad's own 120x120 box. */
+#virtual-controller .vc-hit {
+  position: absolute;
+  pointer-events: auto;
+  box-sizing: border-box;
+}
+
+#virtual-controller .vc-hit-up {
+  left: 0;
+  top: 0;
+  width: 120px;
+  height: 40px;
+  z-index: 2;
+}
+
+#virtual-controller .vc-hit-down {
+  left: 0;
+  bottom: 0;
+  width: 120px;
+  height: 40px;
+  z-index: 2;
+}
+
+#virtual-controller .vc-hit-left-main {
+  left: 0;
+  top: 40px;
+  width: 60px;
+  height: 40px;
+  z-index: 1;
+}
+
+#virtual-controller .vc-hit-left-bar {
+  left: -20px;
+  top: 0;
+  width: 20px;
+  height: 120px;
+  z-index: 1;
+}
+
+#virtual-controller .vc-hit-right-main {
+  right: 0;
+  top: 40px;
+  width: 60px;
+  height: 40px;
+  z-index: 1;
+}
+
+#virtual-controller .vc-hit-right-bar {
+  left: 120px;
+  top: 0;
+  width: 20px;
+  height: 120px;
+  z-index: 1;
 }
 
 #virtual-controller .vc-up {
@@ -347,6 +428,13 @@ const VIRTUAL_HTML: &str =
       <button class="vc-btn vc-left" data-button="left">◀</button>
       <button class="vc-btn vc-right" data-button="right">▶</button>
       <button class="vc-btn vc-down" data-button="down">▼</button>
+
+      <div class="vc-hit vc-hit-up" data-hit="up"></div>
+      <div class="vc-hit vc-hit-down" data-hit="down"></div>
+      <div class="vc-hit vc-hit-left-main" data-hit="left"></div>
+      <div class="vc-hit vc-hit-left-bar" data-hit="left"></div>
+      <div class="vc-hit vc-hit-right-main" data-hit="right"></div>
+      <div class="vc-hit vc-hit-right-bar" data-hit="right"></div>
     </div>
 
     <div class="vc-face">
@@ -479,9 +567,126 @@ function bindButton(button){
   button.addEventListener('contextmenu',e=>e.preventDefault());
 }
 
+// Grouped buttons (d-pad, A/B pair): a single delegated listener on the
+// group container tracks one active pointer and hit-tests with
+// elementFromPoint on every move. This is what makes press-and-drag
+// between buttons in the group (e.g. tap left, slide to right, or tap B,
+// slide to A) work. Plain mouseenter/mouseleave can't do this: touch
+// drags never fire enter/leave on other elements (there's no hover
+// concept for touch), and once a pointer goes down on an element the
+// browser implicitly captures it there, so even mouse enter/leave on
+// *other* buttons wouldn't reliably fire either. Explicit pointer
+// capture + elementFromPoint hit-testing handles mouse and touch the
+// same way.
+function bindButtonGroup(group){
+  let activePointerId=null;
+  let current=null; // {name, visual}
+
+  // Resolves the real DOM element under a point to a {name, visual} pair:
+  // - if it's one of the d-pad's .vc-hit overlay divs, `name` comes from
+  //   data-hit and `visual` is the matching arrow button (for .pressed
+  //   styling) — this is what lets the hitboxes be actual, inspectable
+  //   elements instead of hand-rolled coordinate math.
+  // - otherwise (A/B pair) it's a plain [data-button] element, used as
+  //   both the name source and the visual to style.
+  function resolveAt(x,y){
+    const el=document.elementFromPoint(x,y);
+    if(!el) return null;
+
+    const hitEl=el.closest && el.closest('[data-hit]');
+    if(hitEl && group.contains(hitEl)){
+      const name=hitEl.dataset.hit;
+      const visual=group.querySelector('[data-button="'+name+'"]') || hitEl;
+      return {name, visual};
+    }
+
+    const btnEl=el.closest && el.closest('[data-button]');
+    if(btnEl && group.contains(btnEl)){
+      return {name:btnEl.dataset.button, visual:btnEl};
+    }
+
+    return null;
+  }
+
+  function press(control){
+    if(!control || (current && current.name===control.name)) return;
+    release();
+    current=control;
+    control.visual.classList.add('pressed');
+    setButton(control.name,true);
+  }
+
+  // Visually deselects whatever button in this group is currently held
+  // and tells the host to release it — called whenever the pointer moves
+  // off that button (onto another one, into a dead zone, or off the
+  // group entirely) as well as on pointerup/cancel.
+  function release(){
+    if(!current) return;
+    current.visual.classList.remove('pressed');
+    setButton(current.name,false);
+    current=null;
+  }
+
+  group.addEventListener('pointerdown',e=>{
+    e.preventDefault();
+    const control=resolveAt(e.clientX,e.clientY);
+    if(!control) return;
+
+    activePointerId=e.pointerId;
+    try{ group.setPointerCapture(e.pointerId); }catch(err){}
+
+    if(!ws||ws.readyState!==1){
+      connectVirtualController();
+    }
+    press(control);
+  });
+
+  group.addEventListener('pointermove',e=>{
+    if(e.pointerId!==activePointerId) return;
+    const control=resolveAt(e.clientX,e.clientY);
+    if(control){
+      press(control);
+    }else{
+      // Pointer is still down but has slid off every hit region in the
+      // group — release so nothing stays stuck on, and so it visually
+      // deselects.
+      release();
+    }
+  });
+
+  function endPointer(e){
+    if(e.pointerId!==activePointerId) return;
+    release();
+    try{ group.releasePointerCapture(e.pointerId); }catch(err){}
+    activePointerId=null;
+  }
+
+  group.addEventListener('pointerup',endPointer);
+  group.addEventListener('pointercancel',endPointer);
+  group.addEventListener('pointerleave',e=>{
+    // Only fires if capture wasn't established (e.g. capture unsupported);
+    // with setPointerCapture in place, drags outside the container's
+    // bounding box still deliver move/up events here as normal.
+    if(e.pointerId!==activePointerId) return;
+    endPointer(e);
+  });
+
+  group.addEventListener('contextmenu',e=>e.preventDefault());
+}
+
+const dpadEl=document.querySelector('#virtual-controller .vc-dpad');
+const faceEl=document.querySelector('#virtual-controller .vc-face'); // A/B pair
+const groupedContainers=[dpadEl,faceEl];
+
 document
   .querySelectorAll('#virtual-controller [data-button]')
-  .forEach(bindButton);
+  .forEach(button=>{
+    if(groupedContainers.some(g=>g && g.contains(button))) return; // handled by bindButtonGroup instead
+    bindButton(button);
+  });
+
+if(dpadEl) bindButtonGroup(dpadEl); // enlarged, gap-free hitboxes via .vc-hit divs
+if(faceEl) bindButtonGroup(faceEl); // A/B: hit-tests the real button shapes directly
 
 connectVirtualController();
 "#;
