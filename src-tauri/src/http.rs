@@ -71,7 +71,7 @@ const WEBRTC_VIEWER_HTML: &str = r#"<!DOCTYPE html>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 html,body{width:100%;height:100%;background:#000;overflow:hidden}
-iframe{width:100%;height:100%;border:none;z-index:1;position:relative}
+iframe{width:100%;height:100%;border:none;z-index:1;position:relative;pointer-events:none;}
 {gp_css}
 </style>
 </head><body>
@@ -205,7 +205,7 @@ const VIRTUAL_CSS: &str =
   position: fixed;
   left: 20px;
   right: 20px;
-  bottom: 20px;
+  bottom: 40px;
   height: 220px;
   display: flex;
   flex-direction: column;
@@ -334,6 +334,10 @@ const VIRTUAL_HTML: &str =
 <div id="virtual-controller">
   <div class="vc-shoulders">
     <button class="vc-btn vc-l" data-button="l">L</button>
+    <div class="vc-center">
+      <button class="vc-btn vc-select" data-button="select">SELECT</button>
+      <button class="vc-btn vc-start" data-button="start">START</button>
+    </div>
     <button class="vc-btn vc-r" data-button="r">R</button>
   </div>
 
@@ -343,11 +347,6 @@ const VIRTUAL_HTML: &str =
       <button class="vc-btn vc-left" data-button="left">◀</button>
       <button class="vc-btn vc-right" data-button="right">▶</button>
       <button class="vc-btn vc-down" data-button="down">▼</button>
-    </div>
-
-    <div class="vc-center">
-      <button class="vc-btn vc-select" data-button="select">SELECT</button>
-      <button class="vc-btn vc-start" data-button="start">START</button>
     </div>
 
     <div class="vc-face">
