@@ -79,8 +79,31 @@
     },
   };
 
+  // ---- generic settings persistence helpers ----
+  const STORAGE_PREFIX = "gba-orca-";
+
+  /** @param {string} key @param {*} fallback */
+  function loadSetting(key, fallback) {
+    try {
+      const raw = localStorage.getItem(STORAGE_PREFIX + key);
+      if (raw === null) return fallback;
+      return JSON.parse(raw);
+    } catch (e) {
+      return fallback;
+    }
+  }
+
+  /** @param {string} key @param {*} value */
+  function saveSetting(key, value) {
+    try {
+      localStorage.setItem(STORAGE_PREFIX + key, JSON.stringify(value));
+    } catch (e) {
+      console.error("saveSetting:", key, e);
+    }
+  }
+
   function detectLang() {
-    const saved = localStorage.getItem("gba-orca-lang");
+    const saved = loadSetting("lang", null);
     if (saved && translations[saved]) return saved;
     const sys = (navigator.language || navigator.userLanguage || "en").toLowerCase();
     return sys.startsWith("it") ? "it" : "en";
@@ -88,19 +111,30 @@
 
   let lang = detectLang();
   $: t = translations[lang];
-  $: localStorage.setItem("gba-orca-lang", lang);
+  $: saveSetting("lang", lang);
 
   // ---- stato applicazione ----
   let windows = [];
   let streams = {};
   let server = { interfaces: [], port: 8080, webrtc_port: 8889 };
-  let selectedIp = "";
-  let gbaOnly = true;
+  // Persisted settings: restored on load, saved on every change.
+  let selectedIp = loadSetting("selectedIp", "");
+  let gbaOnly = loadSetting("gbaOnly", true);
+  let streamMode = loadSetting("streamMode", "WebrtcPlus");
+  let controller = loadSetting("controller", 0);
+
   let loading = false;
   let error = "";
   let autoScanInterval = null;
-  let streamMode = "WebrtcPlus";
-  let controller = 0;
+
+  // Guards so we don't immediately re-save values we just loaded/received
+  // from the backend before the user actually interacted with the UI.
+  let settingsLoaded = false;
+
+  $: if (settingsLoaded) saveSetting("selectedIp", selectedIp);
+  $: if (settingsLoaded) saveSetting("gbaOnly", gbaOnly);
+  $: if (settingsLoaded) saveSetting("streamMode", streamMode);
+  $: if (settingsLoaded) saveSetting("controller", controller);
 
   // Wayland-specific state. On Wayland we cannot enumerate windows: the user
   // must pick them via xdg-desktop-portal, then assign each captured PipeWire
@@ -126,7 +160,10 @@
   async function loadServerInfo() {
     try {
       server = await invoke("get_server_info");
-      if (server.interfaces.length > 0 && !selectedIp) {
+      const knownIps = server.interfaces.map((iface) => iface.ip);
+      if (server.interfaces.length > 0 && (!selectedIp || !knownIps.includes(selectedIp))) {
+        // Nothing persisted yet, or the persisted IP is no longer available
+        // on this machine (e.g. different network) — fall back to the first.
         selectedIp = server.interfaces[0].ip;
       }
     } catch (e) {
@@ -250,16 +287,31 @@
 
   onMount(async () => {
     await loadServerInfo();
+
+    // Try to restore the persisted controller on the backend too, so the
+    // saved UI choice and the actual backend state stay in sync on launch.
     try {
-      controller = await invoke("get_remote_controller");
+      const backendController = await invoke("get_remote_controller");
+      // Prefer the persisted value if the user had explicitly set one and
+      // it differs from the backend's default, otherwise trust the backend.
+      if (controller !== backendController) {
+        await invoke("set_remote_controller", { controller });
+      } else {
+        controller = backendController;
+      }
     } catch (e) {
-      controller = 0;
+      // leave the persisted/default controller value as-is
     }
+
     try {
       isWayland = await invoke("is_wayland");
     } catch (e) {
       isWayland = false;
     }
+
+    // From here on, changes to persisted settings should be saved.
+    settingsLoaded = true;
+
     if (isWayland) {
       await refreshWaylandSources();
       await refreshStreams();
