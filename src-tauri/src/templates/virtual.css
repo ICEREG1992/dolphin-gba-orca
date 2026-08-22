@@ -70,29 +70,10 @@
   width: 33%;
   height: 33%;
   border-radius: 6px;
-  /* The hit-area divs (.vc-hit) sit underneath and do the actual pointer
-     handling for the d-pad, so the arrow buttons don't need to catch
-     events themselves — pointer-events:none excludes them from
-     hit-testing entirely (elementFromPoint sees straight through them),
-     so the higher z-index here is purely so they still *paint* on top
-     and look unchanged, rather than getting visually covered by the
-     .vc-hit debug overlays. */
   pointer-events: none;
   z-index: 3;
 }
 
-/* Real, positioned elements for each d-pad hit region — built this way
-   (rather than computed in JS) so the boundaries can be seen directly in
-   devtools, or visually by uncommenting the `background`/`border` below.
-   Layout:
-     - up/down: full width, top/bottom 40px band (original 40px height,
-       extended 40px to either side)
-     - left/right: middle 40px band, split into the original 40x40 square
-       plus a 20x120 vertical bar reaching full height — together a
-       "sideways T". Where a bar overlaps the up/down bands, up/down wins
-       (higher z-index) since that's the arrow's own visual footprint;
-       flip the z-index below to give the bar priority instead.
-   All six are transparent to touch outside .vc-dpad's own 120x120 box. */
 #virtual-controller .vc-hit {
   position: absolute;
   pointer-events: auto;

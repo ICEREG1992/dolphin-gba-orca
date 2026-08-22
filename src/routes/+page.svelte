@@ -82,7 +82,7 @@
     },
   };
 
-  // ---- generic settings persistence helpers ----
+  // Settings helpers
   const STORAGE_PREFIX = "gba-orca-";
 
   /** @param {string} key @param {*} fallback */
@@ -116,11 +116,11 @@
   $: t = translations[lang];
   $: saveSetting("lang", lang);
 
-  // ---- stato applicazione ----
+  // Application state
   let windows = [];
   let streams = {};
   let server = { interfaces: [], port: 8080, webrtc_port: 8889 };
-  // Persisted settings: restored on load, saved on every change.
+
   let selectedIp = loadSetting("selectedIp", "");
   let gbaOnly = loadSetting("gbaOnly", true);
   let streamMode = loadSetting("streamMode", "WebrtcPlus");
@@ -130,8 +130,6 @@
   let error = "";
   let autoScanInterval = null;
 
-  // Guards so we don't immediately re-save values we just loaded/received
-  // from the backend before the user actually interacted with the UI.
   let settingsLoaded = false;
 
   $: if (settingsLoaded) saveSetting("selectedIp", selectedIp);
@@ -165,8 +163,6 @@
       server = await invoke("get_server_info");
       const knownIps = server.interfaces.map((iface) => iface.ip);
       if (server.interfaces.length > 0 && (!selectedIp || !knownIps.includes(selectedIp))) {
-        // Nothing persisted yet, or the persisted IP is no longer available
-        // on this machine (e.g. different network) — fall back to the first.
         selectedIp = server.interfaces[0].ip;
       }
     } catch (e) {
