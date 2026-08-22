@@ -421,7 +421,7 @@
             <th style="width:50px">{t.slot}</th>
             <th>{t.sourceLabel}</th>
             <th style="width:120px">{t.assignSlot}</th>
-            <th style="width:320px">{t.status}</th>
+            <th style="width:340px">{t.status}</th>
           </tr>
         </thead>
         <tbody>
@@ -479,7 +479,7 @@
             <th>{t.windowTitle}</th>
             <th style="width:80px">PID</th>
             <th style="width:90px">{t.size}</th>
-            <th style="width:320px">{t.status}</th>
+            <th style="width:380px">{t.status}</th>
           </tr>
         </thead>
         <tbody>
@@ -700,7 +700,6 @@
     background: #e0e0e0;
     color: #555;
     vertical-align: middle;
-    margin-right: 4px;
   }
 
   .mode-badge.webrtc {
