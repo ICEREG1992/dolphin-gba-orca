@@ -6,7 +6,7 @@
   position: fixed;
   left: 20px;
   right: 20px;
-  bottom: 40px;
+  bottom: 30px;
   height: 220px;
   display: flex;
   flex-direction: column;
@@ -59,21 +59,16 @@
 
 #virtual-controller .vc-dpad {
   position: relative;
-  width: 120px;
-  height: 120px;
-  /* Hit-area divs (see .vc-hit below) extend past the visible 40x40 arrow
-     buttons to cover the whole 120x120 box with no dead zone.
-     #virtual-controller above has pointer-events:none, so without this the
-     enlarged areas outside the actual button elements couldn't receive
-     pointer/touch events at all. */
+  width: 140px;
+  height: 140px;
   pointer-events: auto;
   touch-action: none;
 }
 
 #virtual-controller .vc-dpad .vc-btn {
   position: absolute;
-  width: 40px;
-  height: 40px;
+  width: 33%;
+  height: 33%;
   border-radius: 6px;
   /* The hit-area divs (.vc-hit) sit underneath and do the actual pointer
      handling for the d-pad, so the arrow buttons don't need to catch
@@ -107,69 +102,69 @@
 #virtual-controller .vc-hit-up {
   left: 0;
   top: 0;
-  width: 120px;
-  height: 40px;
+  width: 100%;
+  height: 33%;
   z-index: 2;
 }
 
 #virtual-controller .vc-hit-down {
   left: 0;
   bottom: 0;
-  width: 120px;
-  height: 40px;
+  width: 100%;
+  height: 33%;
   z-index: 2;
 }
 
 #virtual-controller .vc-hit-left-main {
   left: 0;
-  top: 40px;
-  width: 60px;
-  height: 40px;
+  top: 33%;
+  width: 50%;
+  height: 33%;
   z-index: 1;
 }
 
 #virtual-controller .vc-hit-left-bar {
-  left: -20px;
+  left: -14%;
   top: 0;
-  width: 20px;
-  height: 120px;
+  width: 14%;
+  height: 100%;
   z-index: 1;
 }
 
 #virtual-controller .vc-hit-right-main {
   right: 0;
-  top: 40px;
-  width: 60px;
-  height: 40px;
+  top: 33%;
+  width: 50%;
+  height: 33%;
   z-index: 1;
 }
 
 #virtual-controller .vc-hit-right-bar {
-  left: 120px;
+  left: 100%;
   top: 0;
-  width: 20px;
-  height: 120px;
+  width: 14%;
+  height: 100%;
   z-index: 1;
 }
 
 #virtual-controller .vc-up {
-  left: 40px;
+  left: 33%;
   top: 0;
 }
 
 #virtual-controller .vc-down {
-  left: 40px;
+  left: 33%;
   bottom: 0;
 }
 
 #virtual-controller .vc-left {
   left: 0;
-  top: 40px;
+  top: 33%;
 }
 
 #virtual-controller .vc-right {
   right: 0;
-  top: 40px;
+  top: 33%;
 }
 
 #virtual-controller .vc-center {
@@ -200,12 +195,28 @@
   font-size: 18px;
 }
 
+#virtual-controller .vc-face .vc-hit {
+  position: absolute;
+  width: 72px;
+  height: 72px;
+}
+
 #virtual-controller .vc-a {
-  right: 0;
+  right: 0px;
   top: 18px;
 }
 
 #virtual-controller .vc-b {
-  left: 0;
+  left: 0px;
   bottom: 18px;
+}
+
+#virtual-controller .vc-hit-a {
+  right: -10px;
+  top: 8px;
+}
+
+#virtual-controller .vc-hit-b {
+  left: -10px;
+  bottom: 8px;
 }
