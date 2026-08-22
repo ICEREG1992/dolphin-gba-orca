@@ -118,28 +118,13 @@ function bindButton(button){
   button.addEventListener('contextmenu',e=>e.preventDefault());
 }
 
-// Grouped buttons (d-pad, A/B pair): a single delegated listener on the
-// group container tracks one active pointer and hit-tests with
-// elementFromPoint on every move. This is what makes press-and-drag
-// between buttons in the group (e.g. tap left, slide to right, or tap B,
-// slide to A) work. Plain mouseenter/mouseleave can't do this: touch
-// drags never fire enter/leave on other elements (there's no hover
-// concept for touch), and once a pointer goes down on an element the
-// browser implicitly captures it there, so even mouse enter/leave on
-// *other* buttons wouldn't reliably fire either. Explicit pointer
-// capture + elementFromPoint hit-testing handles mouse and touch the
-// same way.
+// Groups buttons so that you can slide between them without needing to lift your finger/left mouse button.
+// requires data-hit elements that act as hit-boxes for the real buttons
 function bindButtonGroup(group){
   let activePointerId=null;
   let current=null; // {name, visual}
 
-  // Resolves the real DOM element under a point to a {name, visual} pair:
-  // - if it's one of the d-pad's .vc-hit overlay divs, `name` comes from
-  //   data-hit and `visual` is the matching arrow button (for .pressed
-  //   styling) — this is what lets the hitboxes be actual, inspectable
-  //   elements instead of hand-rolled coordinate math.
-  // - otherwise (A/B pair) it's a plain [data-button] element, used as
-  //   both the name source and the visual to style.
+  // Gets the element that the cursor is on, based on data-hit hitboxes
   function resolveAt(x,y){
     const el=document.elementFromPoint(x,y);
     if(!el) return null;
@@ -149,11 +134,6 @@ function bindButtonGroup(group){
       const name=hitEl.dataset.hit;
       const visual=group.querySelector('[data-button="'+name+'"]') || hitEl;
       return {name, visual};
-    }
-
-    const btnEl=el.closest && el.closest('[data-button]');
-    if(btnEl && group.contains(btnEl)){
-      return {name:btnEl.dataset.button, visual:btnEl};
     }
 
     return null;
@@ -167,10 +147,6 @@ function bindButtonGroup(group){
     setButton(control.name,true);
   }
 
-  // Visually deselects whatever button in this group is currently held
-  // and tells the host to release it — called whenever the pointer moves
-  // off that button (onto another one, into a dead zone, or off the
-  // group entirely) as well as on pointerup/cancel.
   function release(){
     if(!current) return;
     current.visual.classList.remove('pressed');
@@ -198,9 +174,7 @@ function bindButtonGroup(group){
     if(control){
       press(control);
     }else{
-      // Pointer is still down but has slid off every hit region in the
-      // group — release so nothing stays stuck on, and so it visually
-      // deselects.
+      // User still pressing but no longer on a button
       release();
     }
   });
@@ -215,9 +189,6 @@ function bindButtonGroup(group){
   group.addEventListener('pointerup',endPointer);
   group.addEventListener('pointercancel',endPointer);
   group.addEventListener('pointerleave',e=>{
-    // Only fires if capture wasn't established (e.g. capture unsupported);
-    // with setPointerCapture in place, drags outside the container's
-    // bounding box still deliver move/up events here as normal.
     if(e.pointerId!==activePointerId) return;
     endPointer(e);
   });
@@ -226,17 +197,17 @@ function bindButtonGroup(group){
 }
 
 const dpadEl=document.querySelector('#virtual-controller .vc-dpad');
-const faceEl=document.querySelector('#virtual-controller .vc-face'); // A/B pair
+const faceEl=document.querySelector('#virtual-controller .vc-face');
 const groupedContainers=[dpadEl,faceEl];
 
 document
   .querySelectorAll('#virtual-controller [data-button]')
   .forEach(button=>{
-    if(groupedContainers.some(g=>g && g.contains(button))) return; // handled by bindButtonGroup instead
+    if(groupedContainers.some(g=>g && g.contains(button))) return;
     bindButton(button);
   });
 
-if(dpadEl) bindButtonGroup(dpadEl); // enlarged, gap-free hitboxes via .vc-hit divs
-if(faceEl) bindButtonGroup(faceEl); // A/B: hit-tests the real button shapes directly
+if(dpadEl) bindButtonGroup(dpadEl);
+if(faceEl) bindButtonGroup(faceEl);
 
 connectVirtualController();

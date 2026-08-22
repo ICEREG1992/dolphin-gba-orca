@@ -3,9 +3,7 @@
 // only when the serialized state changes. WS URL uses location.host so the
 // port matches whatever served the viewer (8080 today).
 
-const SLOT = {
-    slot
-};
+const SLOT = {slot};
 let ws = null,
     gpIndex = null;
 let prevBuf = null;
