@@ -291,16 +291,11 @@
   onMount(async () => {
     await loadServerInfo();
 
-    // Try to restore the persisted controller on the backend too, so the
-    // saved UI choice and the actual backend state stay in sync on launch.
+    // Load saved controller preference
     try {
       const backendController = await invoke("get_remote_controller");
-      // Prefer the persisted value if the user had explicitly set one and
-      // it differs from the backend's default, otherwise trust the backend.
       if (controller !== backendController) {
         await invoke("set_remote_controller", { controller });
-      } else {
-        controller = backendController;
       }
     } catch (e) {
       // leave the persisted/default controller value as-is
