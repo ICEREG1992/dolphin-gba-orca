@@ -8,7 +8,6 @@ mod error;
 mod http;
 mod input;
 mod mediamtx;
-mod remote_controller;
 mod network;
 mod stream;
 
@@ -29,7 +28,6 @@ mod platform {
 }
 
 use mediamtx::MediamtxState;
-use remote_controller::RemoteController;
 use stream::StreamSession;
 
 /// Detect a GBA slot from a Dolphin window title (matches "GBA1".."GBA4").
@@ -60,6 +58,15 @@ impl Default for SharedState {
             remote_controller: Arc::new(AtomicU8::new(RemoteController::default() as u8)),
         }
     }
+}
+
+#[repr(u8)]
+#[derive(Default)]
+pub(crate) enum RemoteController {
+    #[default]
+    None = 0,
+    Usb = 1,
+    Virtual = 2,
 }
 
 /// Create a Windows Job Object with KILL_ON_JOB_CLOSE and assign the current
