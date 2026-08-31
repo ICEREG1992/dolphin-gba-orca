@@ -80,6 +80,44 @@
       waylandAlert: "WAYLAND detected",
       waylandSelectOrder: "Select in order:",
     },
+    es:{
+      refresh: "Actualizar",
+      scanning: "Escaneando...",
+      gbaOnly: "Solo ventanas GBA",
+      autoScan: "Auto-escaneo: 3s",
+      server: "Servidor",
+      controller: "Controlador",
+      controllerUsb: "USB",
+      controllerNone: "Ninguno",
+      controllerVirtual: "Virtual",
+      clickToCopy: "Haga clic para copiar",
+      slot: "Slot",
+      windowTitle: "Título de la ventana",
+      size: "Tamaño",
+      status: "Estado",
+      startStream: "Iniciar stream",
+      stop: "Detener",
+      noWindows: "No se encontraron ventanas",
+      windowsLabel: "ventanas",
+      activeStreams: "streams activos",
+      interfaces: "interfaces de red",
+      language: "Idioma",
+      mode: "Modo",
+      mjpeg: "MJPEG",
+      webrtc: "WebRTC",
+      webrtcPlus: "WebRTC++",
+      webrtcVp9: "WebRTC VP9",
+      waylandTitle: "Modo Wayland",
+      waylandHintBefore: "Wayland prohibe la enumeración automática de ventanas. ",
+      waylandHintAction: "Haga clic en el botón",
+      waylandHintAfter: " para seleccionar las ventanas GBA en orden a través del diálogo del portal del sistema.",
+      selectGbaWindows: "Seleccionar ventanas GBA",
+      noWaylandSourcesYet: "Aún no se ha seleccionado ninguna fuente. Haga clic en el botón de arriba para abrir el portal.",
+      assignSlot: "Asignar",
+      sourceLabel: "Fuente",
+      waylandAlert: "WAYLAND detectado",
+      waylandSelectOrder: "Seleccionar en orden:",
+    }
   };
 
   // Settings helpers
@@ -393,6 +431,7 @@
       <select bind:value={lang}>
         <option value="it">Italiano</option>
         <option value="en">English</option>
+        <option value="es">Español</option>
       </select>
     </label>
   </div>
