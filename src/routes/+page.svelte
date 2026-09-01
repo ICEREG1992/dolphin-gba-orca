@@ -1,6 +1,7 @@
 <script>
   import { invoke } from "@tauri-apps/api/core";
   import { onMount, onDestroy } from "svelte";
+  import QRCode from "qrcode";
 
   // ---- i18n ----
   const translations = {
@@ -168,6 +169,10 @@
   let error = "";
   let autoScanInterval = null;
 
+  //Implements QR code for each stream, so the user can scan it with their phone and open the stream in a browser.
+  let showQr = false;
+  let qrCodes = {};
+
   let settingsLoaded = false;
 
   $: if (settingsLoaded) saveSetting("selectedIp", selectedIp);
@@ -187,6 +192,32 @@
   /** @param {number} slot @param {string} mode */
   function streamViewUrl(slot, mode) {
     return `${serverUrl}/v/${slot}`;
+  }
+
+  /*Function to generate QR codes for each stream URL.
+  This will create a QR code for each of the 4 slots, which can be scanned by a mobile device to open the stream in a browser.*/
+  async function generateQrCodes() {
+    if (!selectedIp) return;
+    const codes = {};
+    for (let slot = 1; slot <= 4; slot++) {
+        const url = `${serverUrl}/v/${slot}`;
+        try {
+          codes[slot] = await QRCode.toDataURL(url, {
+            width: 220,
+            margin: 2,
+          });
+        }catch(e) {
+          console.error(`Error generating QR for slot ${slot}:`, e);
+      }
+    }
+    qrCodes = codes;
+  }
+  // Toggle the visibility of QR codes. If they are not generated yet, generate them first.
+  async function toggleQr() {
+    if(!showQr) {
+      await generateQrCodes();
+    }
+    showQr = !showQr;
   }
 
   function modeLabel(mode) {
@@ -385,7 +416,37 @@
     <code on:click={() => copyToClipboard(serverUrl)} title={t.clickToCopy}>
       {serverUrl}
     </code>
+    <button on:click={toggleQr}>
+      {showQr ? "Ocultar QR" : "Mostrar QR"}
+    </button>
   </div>
+
+
+  {#if showQr}
+    <div class="qr-panel">
+        <div class="qr-header">
+            <strong>Connection QR</strong>
+            <button on:click={() => showQr = false}>Cerrar</button>
+        </div>
+          <div class="qr-grid">
+            {#each [1, 2, 3, 4] as slot}
+                <div class="qr-item">
+                    <div class="qr-title">GBA {slot}</div>
+                      {#if qrCodes[slot]}
+                          <img src={qrCodes[slot]} alt={`QR GBA ${slot}`}/>
+                          <code>
+                              {serverUrl}/v/{slot}
+                          </code>
+                      {:else}
+                          <div class="qr-loading">
+                              Generando...
+                          </div>
+                      {/if}
+                  </div>
+              {/each}
+          </div>
+      </div>
+  {/if}
 
   <div class="toolbar">
     {#if isWayland}
@@ -851,4 +912,68 @@
     color: #0078d7;
     font-weight: 700;
   }
+
+  .qr-panel {
+    background: #fff;
+    border-bottom: 1px solid #e0e0e0;
+    padding: 12px;
+}
+
+.qr-header {
+    display: flex;
+    align-items: center;
+    margin-bottom: 12px;
+}
+
+.qr-header strong {
+    font-size: 14px;
+}
+
+.qr-header button {
+    margin-left: auto;
+}
+
+.qr-grid {
+    display: flex;
+    justify-content: center;
+    gap: 24px;
+    flex-wrap: wrap;
+}
+
+.qr-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+}
+
+.qr-title {
+    font-weight: 600;
+    font-size: 13px;
+}
+
+.qr-item img {
+    width: 180px;
+    height: 180px;
+    background: #fff;
+    border: 1px solid #ccc;
+    padding: 6px;
+    box-sizing: border-box;
+}
+
+.qr-item code {
+    font-family: "Consolas", monospace;
+    font-size: 10px;
+    color: #555;
+}
+
+.qr-loading {
+    width: 180px;
+    height: 180px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #f3f3f3;
+    color: #777;
+}
 </style>
