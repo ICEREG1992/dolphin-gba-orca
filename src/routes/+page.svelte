@@ -42,6 +42,10 @@
       sourceLabel: "Sorgente",
       waylandAlert: "WAYLAND rilevato",
       waylandSelectOrder: "Seleziona nell'ordine:",
+      qr: "Codici QR",
+      showQr: "Mostra QR",
+      hideQr: "Nascondi QR",
+      scanQr: "Scansiona il codice QR per connetterti", 
     },
     en: {
       refresh: "Refresh",
@@ -80,6 +84,10 @@
       sourceLabel: "Source",
       waylandAlert: "WAYLAND detected",
       waylandSelectOrder: "Select in order:",
+      qr: "QR Codes",
+      showQr: "Show QR",
+      hideQr: "Hide QR",
+      scanQr: "Scan the QR code to connect",
     },
     es:{
       refresh: "Actualizar",
@@ -118,6 +126,10 @@
       sourceLabel: "Fuente",
       waylandAlert: "WAYLAND detectado",
       waylandSelectOrder: "Seleccionar en orden:",
+      qr: "Codigo QR",
+      showQr: "Mostrar QR",
+      hideQr: "Ocultar QR",
+      scanQr: "Escanee el código QR para conectarse",
     }
   };
 
@@ -219,6 +231,12 @@
     }
     showQr = !showQr;
   }
+  // If the selected IP changes, regenerate the QR codes to reflect the new server URL.
+  async function handleIpChange() {
+    if (showQr){
+        await generateQrCodes();
+    }
+  }
 
   function modeLabel(mode) {
     if (mode === "WebrtcPlus") return "WebRTC++";
@@ -234,6 +252,7 @@
       if (server.interfaces.length > 0 && (!selectedIp || !knownIps.includes(selectedIp))) {
         selectedIp = server.interfaces[0].ip;
       }
+
     } catch (e) {
       console.error("server info:", e);
     }
@@ -407,46 +426,60 @@
   <div class="server-row">
     <label>{t.server}:</label>
     {#if server.interfaces.length > 1}
-      <select bind:value={selectedIp}>
-        {#each server.interfaces as iface}
-          <option value={iface.ip}>{iface.ip} — {iface.name}</option>
-        {/each}
-      </select>
+      <select bind:value={selectedIp} on:change={handleIpChange}>
+      {#each server.interfaces as iface}
+          <option value={iface.ip}>
+              {iface.ip} — {iface.name}
+          </option>
+      {/each}
+    </select>
     {/if}
     <code on:click={() => copyToClipboard(serverUrl)} title={t.clickToCopy}>
       {serverUrl}
     </code>
-    <button on:click={toggleQr}>
-      {showQr ? "Ocultar QR" : "Mostrar QR"}
+    <button
+        class="qr-toggle"
+        on:click={toggleQr}
+        title={showQr ? t.hideQr : t.showQr}
+    >
+        {showQr ? t.hideQr : t.showQr}
     </button>
   </div>
 
 
-  {#if showQr}
-    <div class="qr-panel">
-        <div class="qr-header">
-            <strong>Connection QR</strong>
-            <button on:click={() => showQr = false}>Cerrar</button>
+{#if showQr}
+    <div class="qr-section">
+        <div class="qr-section-header">
+            <strong>{t.qr}</strong>
+            <span>{t.scanQr}</span>
         </div>
-          <div class="qr-grid">
+
+        <div class="qr-grid">
             {#each [1, 2, 3, 4] as slot}
                 <div class="qr-item">
-                    <div class="qr-title">GBA {slot}</div>
-                      {#if qrCodes[slot]}
-                          <img src={qrCodes[slot]} alt={`QR GBA ${slot}`}/>
-                          <code>
-                              {serverUrl}/v/{slot}
-                          </code>
-                      {:else}
-                          <div class="qr-loading">
-                              Generando...
-                          </div>
-                      {/if}
-                  </div>
-              {/each}
-          </div>
-      </div>
-  {/if}
+                    <div class="qr-slot">
+                        {t.slot} {slot}
+                    </div>
+
+                    {#if qrCodes[slot]}
+                        <img
+                            src={qrCodes[slot]}
+                            alt={`${t.qr} ${t.slot} ${slot}`}
+                        />
+
+                        <code>
+                            {serverUrl}/v/{slot}
+                        </code>
+                    {:else}
+                        <div class="qr-loading">
+                            ...
+                        </div>
+                    {/if}
+                </div>
+            {/each}
+        </div>
+    </div>
+{/if}
 
   <div class="toolbar">
     {#if isWayland}
@@ -913,31 +946,36 @@
     font-weight: 700;
   }
 
-  .qr-panel {
-    background: #fff;
-    border-bottom: 1px solid #e0e0e0;
-    padding: 12px;
-}
-
-.qr-header {
-    display: flex;
-    align-items: center;
-    margin-bottom: 12px;
-}
-
-.qr-header strong {
-    font-size: 14px;
-}
-
-.qr-header button {
+.qr-toggle {
     margin-left: auto;
 }
 
-.qr-grid {
+.qr-section {
+    background: #f8f8f8;
+    border-bottom: 1px solid #e0e0e0;
+    padding: 12px 16px 16px;
+}
+
+.qr-section-header {
     display: flex;
-    justify-content: center;
-    gap: 24px;
-    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 10px;
+    margin-bottom: 12px;
+}
+
+.qr-section-header strong {
+    font-size: 14px;
+}
+
+.qr-section-header span {
+    font-size: 12px;
+    color: #666;
+}
+
+.qr-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(150px, 1fr));
+    gap: 16px;
 }
 
 .qr-item {
@@ -947,15 +985,15 @@
     gap: 6px;
 }
 
-.qr-title {
+.qr-slot {
     font-weight: 600;
     font-size: 13px;
 }
 
 .qr-item img {
-    width: 180px;
-    height: 180px;
-    background: #fff;
+    width: 160px;
+    height: 160px;
+    background: white;
     border: 1px solid #ccc;
     padding: 6px;
     box-sizing: border-box;
@@ -968,12 +1006,12 @@
 }
 
 .qr-loading {
-    width: 180px;
-    height: 180px;
+    width: 160px;
+    height: 160px;
     display: flex;
     align-items: center;
     justify-content: center;
-    background: #f3f3f3;
+    background: #eee;
     color: #777;
 }
 </style>
